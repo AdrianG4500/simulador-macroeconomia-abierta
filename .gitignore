@@ -1,0 +1,31 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment variables
+.env
+
+# Streamlit
+.streamlit/credentials.toml
+
+# Reports and exports generated locally
+reports/
+*.pdf
+*.html
+*.png
+*.csv
+*.parquet
+
+# VS Code / IDE settings
+.vscode/
+.idea/
+*.swp

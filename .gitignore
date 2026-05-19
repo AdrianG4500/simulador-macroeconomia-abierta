@@ -16,6 +16,7 @@ venv.bak/
 
 # Streamlit
 .streamlit/credentials.toml
+.streamlit/secrets.toml
 
 # Reports and exports generated locally
 reports/

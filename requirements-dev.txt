@@ -1,0 +1,5 @@
+-r requirements.txt
+pytest==8.2.2
+black==24.4.2
+mypy==1.10.0
+scikit-learn==1.4.2

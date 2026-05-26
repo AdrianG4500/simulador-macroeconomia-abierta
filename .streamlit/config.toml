@@ -1,11 +1,11 @@
+[server]
+maxUploadSize = 10
+enableCORS = false
+enableXsrfProtection = true
+
 [theme]
 primaryColor = "#f59e0b"
 backgroundColor = "#0B1120"
 secondaryBackgroundColor = "#111827"
 textColor = "#f8fafc"
 font = "sans serif"
-
-[server]
-headless = true
-enableCORS = false
-enableXsrfProtection = true

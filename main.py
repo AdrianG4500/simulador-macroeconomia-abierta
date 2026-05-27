@@ -21,8 +21,8 @@ from ui.endgame_screen import render_endgame_screen
 
 def main():
     st.set_page_config(
-        page_title="Simulador Macroeconómico Abierto V2.0",
-        page_icon="📈",
+        page_title="The Economic War Room",
+        page_icon="🌎",
         layout="wide",
         initial_sidebar_state="expanded"
     )
@@ -68,7 +68,7 @@ def main():
     </style>
     """, unsafe_allow_html=True)
     
-    st.title("📈 Simulador Macroeconómico Abierto — V2.0")
+    st.title("The Economic War Room")
     
     # ── RECUPERAR / INSTANCIAR STATE MANAGER V2 EN SESSION STATE ───────────────
     if "mgr" not in st.session_state:

@@ -49,6 +49,7 @@ from engine.dynamics_v2 import (
     compute_inflation,
     compute_j_curve_flag,
     compute_output_gap,
+    compute_sovereign_risk,
     compute_unemployment,
     update_adaptive_expectations,
     update_non_tradable_price,
@@ -146,6 +147,14 @@ class SimStateManagerV2:
                 elif key in pi:
                     pi[key] = val
 
+        # Sincronizar t_c con t si t_c no fue modificado pero t sí
+        if pi.get("t_c") == 0.20 and sp.get("t") != 0.20:
+            pi["t_c"] = sp["t"]
+
+        # Sincronizar G_c e I_g si G no coincide con G_c + I_g
+        if pi.get("G") != pi.get("G_c", 0.0) + pi.get("I_g", 0.0):
+            pi["G_c"] = pi["G"] - pi.get("I_g", 0.0)
+
         # 3. Aplicar custom_initial_state
         if custom_initial_state:
             for key, val in custom_initial_state.items():
@@ -158,6 +167,9 @@ class SimStateManagerV2:
         R_0     = float(init_state.get("R", 50.0))
         B_0     = float(init_state.get("B", 60.0))
 
+        # Calcular riesgo soberano t=0
+        rho_0, rating_0 = compute_sovereign_risk(B_0, Y_pot_0, R_0)
+
         # 4. Calcular equilibrio t=0
         eq0 = solve_equilibrium_v2(
             sp=sp, pi=pi,
@@ -165,6 +177,7 @@ class SimStateManagerV2:
             E_prev=pi["E"],
             j_curve_active=False,
             delta_E_expected=0.0,
+            rho=rho_0 * 100.0,  # FASE 3.1
         )
 
         # Variables derivadas t=0
@@ -174,7 +187,20 @@ class SimStateManagerV2:
 
         # Finanzas públicas t=0
         rec_0, _int_0, def_0, _B_upd = compute_fiscal_balance(
-            pi["G"], sp["t"], eq0["Y"], eq0["r"], B_0
+            G=pi["G"],
+            t=sp["t"],
+            Y=eq0["Y"],
+            r=eq0["r"],
+            B_prev=B_0,
+            G_c=pi.get("G_c", 15.0),
+            I_g=pi.get("I_g", 5.0),
+            Tr=pi.get("Tr", 0.0),
+            t_c=pi.get("t_c", sp.get("t", 0.20)),
+            t_k=pi.get("t_k", 0.0),
+            tau=pi.get("tau", 0.0),
+            M_imp=eq0.get("M_imp", 0.0),
+            r_star=pi.get("r_star", 5.0),
+            rho=rho_0,
         )
         deficit_pct_0 = def_0 / max(eq0["Y"], 1e-6)
 
@@ -222,6 +248,13 @@ class SimStateManagerV2:
             "mult":           round(eq0["mult"], 4),
             "policy_applied": dict(pi),
             "events_triggered": [],
+            "X":              round(eq0.get("X", float("nan")), 4),
+            "M_imp":          round(eq0.get("M_imp", float("nan")), 4),
+            "Y_T":            round(eq0.get("Y_T", 0.0), 4),
+            "Y_NT":           round(eq0.get("Y_NT", 0.0), 4),
+            "rho":            round(rho_0, 4),
+            "rating":         rating_0,
+            "FX_intervention": 0.0,
         }
 
         # 6. Inicializar GameState
@@ -359,6 +392,14 @@ class SimStateManagerV2:
                 elif key in sp:
                     sp[key] = val
 
+        # Sincronizar t_c con t si t_c no fue modificado pero t sí
+        if pi.get("t_c") == 0.20 and sp.get("t") != 0.20:
+            pi["t_c"] = sp["t"]
+
+        # Sincronizar G_c e I_g si G no coincide con G_c + I_g o si G cambió
+        if "G" in (policy_changes or {}) or pi.get("G") != pi.get("G_c", 0.0) + pi.get("I_g", 0.0):
+            pi["G_c"] = pi["G"] - pi.get("I_g", 0.0)
+
         # Detectar cambio de régimen solicitado por el jugador
         new_regime = pi.get("regime", old_regime)
         if new_regime != old_regime:
@@ -369,9 +410,51 @@ class SimStateManagerV2:
 
         regime = pi["regime"]
 
+        # ── FILTRO DEL TRILEMA (V2.1) ─────────────────────────────────────────
+        # Bajo TC Fijo o Crawling Peg la oferta monetaria es ENDÓGENA:
+        # el banco central sacrifica M para mantener E. Cualquier cambio
+        # que el jugador intente sobre M se ignora (ya lo calcula eq_fixed).
+        if regime in ("fixed", "crawling_peg"):
+            if "M" in (policy_changes or {}):
+                import logging as _lg
+                _lg.getLogger(__name__).info(
+                    "[Trilema] Cambio de M ignorado bajo régimen '%s'. "
+                    "M es endógena bajo TC Fijo / Crawling Peg.", regime
+                )
+                pi.pop("M", None)  # M la calcula eq_fixed; no se sobreescribe
+
+        # Controles de Capital: si el jugador activa k_c > 0 bajo movilidad
+        # perfecta anterior (k_c==0), loggear la transición. La matemática
+        # (f_eff = f*(1-k_c)) se encarga del resto.
+        old_kc = float(state["policy"].get("k_c", 0.0))
+        new_kc = float(pi.get("k_c", old_kc))
+        if old_kc == 0.0 and new_kc > 0.0:
+            import logging as _lg
+            _lg.getLogger(__name__).info(
+                "[Trilema] Controles de capital activados (k_c=%.2f). "
+                "Transición a movilidad imperfecta implícita: f_eff = f*(1-k_c).",
+                new_kc
+            )
+            state["news_feed"].append(NewsItem(
+                t=state["t"] + 1,
+                category="policy",
+                message=(
+                    f"🛡️ CONTROLES DE CAPITAL: Se restringen los flujos financieros "
+                    f"(k_c={new_kc:.0%}). La movilidad de capitales efectiva se reduce. "
+                    "La curva BP se vuelve más empinada."
+                ),
+                severity="warning",
+            ))
+        # ────────────────────────────────────────────────────────────────────
+
         # ── PASO 3: RESOLVER Y_pot ────────────────────────────────────────────
         endogenous_shock = 0.0   # Fase 3: eventos endógenos pueden modificar esto
-        Y_pot = update_potential_output(state["Y_pot"], sp["g_pot"], endogenous_shock)
+        Y_pot = update_potential_output(
+            state["Y_pot"],
+            sp["g_pot"],
+            endogenous_shock,
+            I_g=pi.get("I_g", 0.0),
+        )
 
         # Valores del turno anterior (de la última entrada del historial)
         prev = state["history"][-1]
@@ -383,17 +466,69 @@ class SimStateManagerV2:
         j_curve_active = state["j_curve_active"]
 
         # ── PASO 4: CALCULAR EQUILIBRIO IS-LM-BP ─────────────────────────────
-        eq = solve_equilibrium_v2(
-            sp=sp,
-            pi=pi,
-            Y_pot=Y_pot,
-            P_NT=state["P_NT"],
-            E_prev=E_prev,
-            Y_prev=Y_prev,
-            r_prev=r_prev,
-            j_curve_active=j_curve_active,
-            delta_E_expected=delta_E_expected,
-        )
+        # Calcular riesgo país al inicio del turno basado en las variables del turno anterior
+        rho, rating = compute_sovereign_risk(state["B"], state["Y_pot"], state["R"])
+
+        is_intervention = False
+        intervention_amount = 0.0
+        E_band_upper = None
+
+        if regime == "dirty_float":
+            E_band_upper = pi.get("E_band_upper")
+            if E_band_upper is None:
+                E_band_upper = E_prev * 1.10
+
+            # Resolver equilibrio flexible puro temporalmente
+            pi_temp = dict(pi)
+            pi_temp["regime"] = "flexible"
+            eq = solve_equilibrium_v2(
+                sp=sp,
+                pi=pi_temp,
+                Y_pot=Y_pot,
+                P_NT=state["P_NT"],
+                E_prev=E_prev,
+                Y_prev=Y_prev,
+                r_prev=r_prev,
+                j_curve_active=j_curve_active,
+                delta_E_expected=delta_E_expected,
+                rho=rho * 100.0,
+            )
+
+            # Si el tipo de cambio endógeno supera la banda
+            if eq["E_endo"] > E_band_upper:
+                is_intervention = True
+                # Re-resolver en TC fijo con E = E_band_upper
+                pi_temp["regime"] = "fixed"
+                pi_temp["E"] = E_band_upper
+                eq = solve_equilibrium_v2(
+                    sp=sp,
+                    pi=pi_temp,
+                    Y_pot=Y_pot,
+                    P_NT=state["P_NT"],
+                    E_prev=E_prev,
+                    Y_prev=Y_prev,
+                    r_prev=r_prev,
+                    j_curve_active=j_curve_active,
+                    delta_E_expected=delta_E_expected,
+                    rho=rho * 100.0,
+                )
+                intervention_amount = max(0.0, (pi["M"] - eq["M_endo"]) / E_band_upper)
+            else:
+                is_intervention = False
+                intervention_amount = 0.0
+        else:
+            eq = solve_equilibrium_v2(
+                sp=sp,
+                pi=pi,
+                Y_pot=Y_pot,
+                P_NT=state["P_NT"],
+                E_prev=E_prev,
+                Y_prev=Y_prev,
+                r_prev=r_prev,
+                j_curve_active=j_curve_active,
+                delta_E_expected=delta_E_expected,
+                rho=rho * 100.0,
+            )
 
         # ── PASO 5: VARIABLES DERIVADAS ───────────────────────────────────────
         Y = eq["Y"]
@@ -423,6 +558,15 @@ class SimStateManagerV2:
             M_snap = M_endo_raw if not math.isnan(M_endo_raw) else pi["M"]
             pi["E"] = E_current          # Actualizar E para el próximo turno
 
+        elif regime == "dirty_float":
+            if is_intervention:
+                E_current = E_band_upper
+                M_snap = eq["M_endo"]
+            else:
+                E_current = E_endo_raw if not math.isnan(E_endo_raw) else E_prev
+                M_snap = pi["M"]
+            pi["E"] = E_current
+
         else:
             E_current = E_prev
             M_snap = pi["M"]
@@ -446,9 +590,11 @@ class SimStateManagerV2:
         # Expectativas adaptativas para el próximo turno
         pi_e_new = update_adaptive_expectations(pi_t)
 
-        # Precio de no-transables: crece con inflación núcleo (sin pass-through)
+        # Precio de no-transables: crece con inflación núcleo (sin pass-through).
+        # FIX DT-4: pi_core se acota a 0 para evitar deflación absurda de P_NT
+        # en períodos de devaluación fuerte donde beta_PT·(ΔE/E) > pi_t.
         devaluation_rate = delta_E / max(E_prev, 1e-9)
-        pi_core = pi_t - sp["beta_PT"] * devaluation_rate
+        pi_core = max(0.0, pi_t - sp["beta_PT"] * devaluation_rate)
         P_NT_new = update_non_tradable_price(state["P_NT"], pi_core)
 
         # J-curve flag para el PRÓXIMO turno (¿hubo devaluación significativa?)
@@ -458,14 +604,27 @@ class SimStateManagerV2:
         state["delta_E_expected"] = 0.0
 
         # ── PASO 6: DINÁMICAS FISCALES Y EXTERNAS ────────────────────────────
+        # pi["G"] = G_total fue sincronizado por eq_fixed/eq_flexible
+        G_snap = eq.get("G_total", pi.get("G", pi.get("G_c", 0.0) + pi.get("I_g", 0.0)))
         rec, interests, deficit, B_new = compute_fiscal_balance(
-            G=pi["G"],
-            t=sp["t"],
+            G=G_snap,
+            t=pi.get("t_c", sp.get("t", 0.20)),
             Y=Y,
             r=r,
             B_prev=state["B"],
+            G_c=pi.get("G_c"),
+            I_g=pi.get("I_g"),
+            Tr=pi.get("Tr", 0.0),
+            t_c=pi.get("t_c"),
+            t_k=pi.get("t_k", 0.0),
+            tau=pi.get("tau", 0.0),
+            M_imp=eq.get("M_imp", 0.0),
+            r_star=pi.get("r_star"),
+            rho=rho,
         )
         R_new = update_reserves(state["R"], eq["NX"], regime)
+        if regime == "dirty_float" and is_intervention:
+            R_new = round(R_new - intervention_amount, 6)
 
         # ── PASO 7: CIRCUIT BREAKER ───────────────────────────────────────────
         crisis_fired, new_regime_cb, E_crisis = check_reserve_circuit_breaker(
@@ -498,7 +657,7 @@ class SimStateManagerV2:
         # ── PASO 8: SALTER-SWAN DINÁMICO ──────────────────────────────────────
         A_ref = state["history"][0]["A_domestic"]
         q_ref = state["history"][0]["q_real"]
-        ss = compute_salter_swan(eq, sp, pi["G"], A_ref=A_ref, q_ref=q_ref)
+        ss = compute_salter_swan(eq, sp, G_snap, A_ref=A_ref, q_ref=q_ref)
 
         # ── PASO 9: PROCESAR EVENTOS (REAL — FASE 3) ──────────────────────────
         events_triggered: list[str] = []
@@ -513,7 +672,7 @@ class SimStateManagerV2:
             "NX":             round(eq["NX"], 4),
             "C":              round(eq["C"], 4),
             "I_inv":          round(eq["I_inv"], 4),
-            "G":              pi["G"],
+            "G":              G_snap,
             "recaudacion":    round(rec, 4),
             "deficit":        round(deficit, 4),
             "B":              round(B_new, 2),
@@ -531,6 +690,13 @@ class SimStateManagerV2:
             "mult":           round(eq["mult"], 4),
             "policy_applied": dict(pi),
             "events_triggered": [],
+            "X":              round(eq.get("X", float("nan")), 4),
+            "M_imp":          round(eq.get("M_imp", float("nan")), 4),
+            "Y_T":            round(eq.get("Y_T", 0.0), 4),
+            "Y_NT":           round(eq.get("Y_NT", 0.0), 4),
+            "rho":            round(rho, 4),
+            "rating":         rating,
+            "FX_intervention": round(intervention_amount, 4),
         }
 
         # Guardar en historial temporalmente
@@ -587,7 +753,7 @@ class SimStateManagerV2:
             "NX":             round(eq["NX"], 4),
             "C":              round(eq["C"], 4),
             "I_inv":          round(eq["I_inv"], 4),
-            "G":              pi["G"],
+            "G":              G_snap,
             "recaudacion":    round(rec, 4),
             "deficit":        round(deficit, 4),
             "B":              round(B_new, 2),
@@ -605,6 +771,13 @@ class SimStateManagerV2:
             "mult":           round(eq["mult"], 4),
             "policy_applied": dict(pi),
             "events_triggered": events_triggered,
+            "X":              round(eq.get("X", float("nan")), 4),
+            "M_imp":          round(eq.get("M_imp", float("nan")), 4),
+            "Y_T":            round(eq.get("Y_T", 0.0), 4),
+            "Y_NT":           round(eq.get("Y_NT", 0.0), 4),
+            "rho":            round(rho, 4),
+            "rating":         rating,
+            "FX_intervention": round(intervention_amount, 4),
         }
 
         state["history"].append(snap)

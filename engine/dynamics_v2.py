@@ -22,6 +22,8 @@ Este módulo NO importa de ui/, streamlit, ni directamente de config/.
 
 from __future__ import annotations
 
+from typing import Optional
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # BRECHA DEL PRODUCTO Y POTENCIAL
@@ -60,25 +62,30 @@ def update_potential_output(
     Y_pot: float,
     g_pot: float,
     endogenous_shock: float = 0.0,
+    I_g: float = 0.0,
+    gamma: float = 0.15,
 ) -> float:
     """
-    Actualizacion del PIB potencial entre turnos.
+    Actualizacion del PIB potencial entre turnos (V2.1).
 
-    Y_pot_new = Y_pot * (1 + g_pot + endogenous_shock)
+    Y_pot_new = Y_pot * (1 + g_pot + endogenous_shock) + gamma * I_g
 
     El `endogenous_shock` permite que eventos de juego (e.g., "Malestar Social",
     destruccion de capital) reduzcan el potencial permanentemente.
+    gamma * I_g modela el impacto de la inversión pública en la capacidad productiva de largo plazo.
 
     Parameters
     ----------
     Y_pot            : PIB potencial del periodo anterior
     g_pot            : Tasa de crecimiento potencial estructural
     endogenous_shock : Shock endogeno sobre el potencial (negativo = contraccion)
+    I_g              : Inversión pública del turno actual (default 0.0)
+    gamma            : Eficiencia marginal de la inversión pública en Y_pot (default 0.15)
 
     Returns
     -------
     float : Nuevo PIB potencial
-
+ 
     Raises
     ------
     ValueError
@@ -87,7 +94,7 @@ def update_potential_output(
     if Y_pot <= 0.0:
         raise ValueError(f"Y_pot debe ser positivo, recibido: {Y_pot}")
     growth_rate = g_pot + endogenous_shock
-    return Y_pot * (1.0 + growth_rate)
+    return Y_pot * (1.0 + growth_rate) + (gamma * I_g)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -226,6 +233,17 @@ def update_non_tradable_price(P_NT: float, pi_core: float) -> float:
 # FINANZAS PUBLICAS Y DEUDA — CROWDING-OUT INTERTEMPORAL
 # ─────────────────────────────────────────────────────────────────────────────
 
+class FiscalBalanceResult(dict):
+    """
+    Clase que hereda de dict para permitir acceso por llaves,
+    pero define __iter__ para soportar desempaquetado de tuplas (retrocompatibilidad).
+    """
+    def __iter__(self):
+        yield self["recaudacion"]
+        yield self["intereses"]
+        yield self["deficit"]
+        yield self["B_new"]
+
 def compute_fiscal_balance(
     G: float,
     t: float,
@@ -233,51 +251,73 @@ def compute_fiscal_balance(
     r: float,
     B_prev: float,
     r_scale: float = 100.0,
-) -> tuple[float, float, float, float]:
+    # Nuevos argumentos opcionales V2.1
+    G_c: Optional[float] = None,
+    I_g: Optional[float] = None,
+    Tr: float = 0.0,
+    t_c: Optional[float] = None,
+    t_k: float = 0.0,
+    tau: float = 0.0,
+    M_imp: float = 0.0,
+    r_star: Optional[float] = None,
+    rho: float = 0.0,
+) -> FiscalBalanceResult:
     """
-    Balance fiscal y evolucion de la deuda soberana.
+    Balance fiscal y evolucion de la deuda soberana desagregado (V2.1).
 
-    recaudacion = t * Y
-    intereses   = (r / r_scale) * B_prev
-    deficit     = G - recaudacion + intereses
-    B_new       = B_prev + deficit
+    Recaudacion = (t_c * Y) + (t_k * Y) + (tau * M_imp)
+    Gasto = G_c + I_g + Tr
+    Intereses = (r_star / 100.0 + rho) * B_prev
+    Deficit = Gasto + Intereses - Recaudacion
+    B_new = B_prev + Deficit
 
-    NOTA SOBRE ESCALA DE r:
-    El motor IS-LM-BP trabaja con r en unidades de puntos porcentuales
-    (e.g., r = 5.0 significa 5%). Para calcular intereses sobre la deuda
-    nominal B_prev, se necesita la tasa en decimal: r / 100.
-    El parametro r_scale controla esta conversion (default = 100).
-
-    El crowding-out opera inter-periodo: mayor B_prev eleva la carga de
-    intereses, expandiendo el deficit, lo que presionara r al alza en
-    periodos futuros a traves de la condicion de solvencia soberana.
-    No hay circularidad dentro del mismo periodo.
-
-    Parameters
-    ----------
-    G       : Gasto publico
-    t       : Tasa impositiva proporcional
-    Y       : PIB de equilibrio del periodo
-    r       : Tasa de interes de equilibrio del periodo (en puntos porcentuales)
-    B_prev  : Deuda soberana al inicio del periodo
-    r_scale : Factor de escala de r (default 100: r en puntos porcentuales)
-
-    Returns
-    -------
-    tuple[float, float, float, float]
-        (recaudacion, intereses, deficit, B_new)
+    Retrocompatibilidad:
+    Si no se pasan los argumentos desagregados, se cae en el cálculo agregado
+    V2.0 original. Adicionalmente, el retorno hereda de dict pero puede
+    desempaquetarse como tupla: (recaudacion, intereses, deficit, B_new).
     """
-    recaudacion = t * Y
-    intereses   = (r / r_scale) * B_prev
-    deficit     = G - recaudacion + intereses
-    B_new       = B_prev + deficit
+    # Fallbacks retrocompatibles
+    if t_c is None:
+        t_c = t
+        # Si se usa la tasa proporcional sp["t"] y no hay t_k, recaudacion = t * Y
+    
+    if G_c is None:
+        # Si no hay G_c ni I_g, asumimos que G es el gasto total y es corriente
+        if I_g is None:
+            G_c = G
+            I_g = 0.0
+        else:
+            # Si hay I_g, G_c = G - I_g
+            G_c = G - I_g
+    elif I_g is None:
+        I_g = G - G_c
 
-    return (
-        round(recaudacion, 6),
-        round(intereses, 6),
-        round(deficit, 6),
-        round(B_new, 6),
-    )
+    # Calcular recaudacion, gasto e intereses
+    recaudacion = t_c * Y + t_k * Y + tau * M_imp
+    gasto = G_c + I_g + Tr
+
+    if r_star is None:
+        # Fallback retrocompatible: usar la tasa doméstica de equilibrio r
+        sovereign_rate = r / r_scale
+    else:
+        # Tasa internacional + prima de riesgo país
+        sovereign_rate = r_star / 100.0 + rho
+
+    intereses = sovereign_rate * B_prev
+    deficit = gasto + intereses - recaudacion
+    B_new = B_prev + deficit
+
+    return FiscalBalanceResult({
+        "recaudacion": round(recaudacion, 6),
+        "gasto": round(gasto, 6),
+        "intereses": round(intereses, 6),
+        "deficit": round(deficit, 6),
+        "B_new": round(B_new, 6),
+        "Recaudacion": round(recaudacion, 6),
+        "Gasto": round(gasto, 6),
+        "Intereses": round(intereses, 6),
+        "Deficit": round(deficit, 6),
+    })
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -404,3 +444,53 @@ def check_reserve_circuit_breaker(
         return True, new_regime, round(new_E, 6)
 
     return False, regime, E_current
+
+
+def compute_sovereign_risk(B: float, Y_pot: float, R: float) -> tuple[float, str]:
+    """
+    Calcula la prima de riesgo soberano (rho) y la calificación crediticia.
+
+    Rating Brackets:
+    - Deuda/PIB < 30%: "A", rho = 0.01 (100 bps)
+    - Deuda/PIB < 60%: "BBB", rho = 0.03 (300 bps)
+    - Deuda/PIB < 90%: "BB-", rho = 0.06 (600 bps)
+    - Deuda/PIB < 120%: "CCC", rho = 0.12 (1200 bps)
+    - Deuda/PIB >= 120%: "DEFAULT", rho = 0.25 (2500 bps)
+
+    Ajuste por Reservas internacionales críticas:
+    - Si R < 0.0 (Reservas negativas), suma 0.05 a rho y añade '(Reserva Crítica)' al rating.
+
+    Parameters
+    ----------
+    B     : Deuda acumulada
+    Y_pot : PIB potencial (para normalizar la deuda)
+    R     : Reservas internacionales actuales
+
+    Returns
+    -------
+    tuple[float, str]
+        (rho, rating)
+    """
+    debt_ratio = B / max(Y_pot, 1.0)
+
+    if debt_ratio < 0.30:
+        rating = "A"
+        rho = 0.01
+    elif debt_ratio < 0.60:
+        rating = "BBB"
+        rho = 0.03
+    elif debt_ratio < 0.90:
+        rating = "BB-"
+        rho = 0.06
+    elif debt_ratio < 1.20:
+        rating = "CCC"
+        rho = 0.12
+    else:
+        rating = "DEFAULT"
+        rho = 0.25
+
+    if R < 0.0:
+        rho += 0.05
+        rating = f"{rating} (Reserva Crítica)"
+
+    return rho, rating

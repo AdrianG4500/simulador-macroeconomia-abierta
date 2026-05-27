@@ -178,7 +178,7 @@ def render_onboarding_panel(mgr: SimStateManagerV2) -> None:
         difficulty_opt = st.radio(
             "Nivel de Dificultad",
             options=["easy", "hard"],
-            format_func=lambda x: "🟢 Fácil (Visualización de parámetros + sliders)" if x == "easy" else "🔴 Difícil (Niebla de guerra, parámetros ocultos)",
+            format_func=lambda x: "🟢 Guiado (Visualización de parámetros + sliders)" if x == "easy" else "🔴 Experto Macroeconómico (Niebla de guerra, parámetros ocultos)",
             key="ob_difficulty_radio"
         )
         st.session_state["ob_difficulty"] = difficulty_opt

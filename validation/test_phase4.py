@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 import pytest
 import plotly.graph_objects as go
+import streamlit as st
 
 # Asegurar que el directorio raíz del proyecto esté en el path
 _PROJECT_ROOT = Path(__file__).parent.parent
@@ -25,7 +26,16 @@ from ui.charts_v2 import (
     plot_economic_cycle,
     plot_reserves_thermometer,
     plot_debt_snowball,
-    plot_islm_bp_dynamic
+    plot_islm_bp_dynamic,
+    plot_gdp_decomposition,
+    plot_sectoral_composition,
+    plot_fiscal_odometer,
+    plot_butterfly_trade,
+    plot_exchange_intervention,
+    plot_salter_swan,
+    plot_trilemma_ternary,
+    plot_business_cycle_clock,
+    plot_reelection_radar
 )
 from ui.endgame_screen import calculate_normalized_metrics, plot_endgame_spider, get_custom_narrative
 
@@ -135,6 +145,55 @@ def test_charts_v2_compilation():
     # 4. Bola de nieve de deuda
     fig_deuda = plot_debt_snowball(history)
     assert isinstance(fig_deuda, go.Figure)
+
+    # 5. Nuevo: Descomposición del PIB V2.1
+    fig_gdp = plot_gdp_decomposition(history)
+    assert isinstance(fig_gdp, go.Figure)
+    assert len(fig_gdp.data) == 5, "Debería tener 4 barras + 1 línea"
+
+    # 6. Nuevo: Composición Sectorial (Enfermedad Holandesa)
+    fig_sec = plot_sectoral_composition(history)
+    assert isinstance(fig_sec, go.Figure)
+    assert len(fig_sec.data) == 2, "Debería tener sector transable y no transable"
+
+    # 7. Nuevo: Odómetro Fiscal (Waterfall)
+    fig_fisc = plot_fiscal_odometer(snap_1)
+    assert isinstance(fig_fisc, go.Figure)
+
+    # 8. Nuevo: Balanza en mariposa (divergente horizontal)
+    mgr_mock = SimStateManagerV2()
+    mgr_mock.calibrate("Economia_Saludable")
+    st.session_state["mgr"] = mgr_mock
+    fig_bf = plot_butterfly_trade(history)
+    assert isinstance(fig_bf, go.Figure)
+
+    # 9. Nuevo: Intervención cambiaria (Línea + Barras)
+    fig_interv = plot_exchange_intervention(history)
+    assert isinstance(fig_interv, go.Figure)
+
+    # 10. Nuevo: Salter-Swan (Scatter + X lines)
+    fig_ss = plot_salter_swan(snap_1, mgr_mock.state["structural"])
+    assert isinstance(fig_ss, go.Figure)
+
+    # 11. Nuevo (5.2b): IS-LM-BP Estático
+    fig_islm = plot_islm_bp_dynamic(snap_1, mgr_mock.state["structural"])
+    assert isinstance(fig_islm, go.Figure)
+
+    # 12. Nuevo (5.2b): Trilema Ternario
+    fig_tri = plot_trilemma_ternary(snap_1)
+    assert isinstance(fig_tri, go.Figure)
+
+    # 13. Nuevo (5.2b): Deuda intertemporal
+    fig_deuda_v21 = plot_debt_snowball(history, snap_1)
+    assert isinstance(fig_deuda_v21, go.Figure)
+
+    # 14. Nuevo (5.2b): Reloj del ciclo (Business Cycle Clock)
+    fig_clock_v21 = plot_business_cycle_clock(history)
+    assert isinstance(fig_clock_v21, go.Figure)
+
+    # 15. Nuevo (5.2b): Radar de reelección
+    fig_radar_v21 = plot_reelection_radar(history)
+    assert isinstance(fig_radar_v21, go.Figure)
 
 
 def test_narrative_feedback():

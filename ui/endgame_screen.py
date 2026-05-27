@@ -556,7 +556,7 @@ def render_endgame_screen(mgr: SimStateManagerV2) -> None:
             pdf_data = generate_pdf_report(summary, history, scenario_name, regime, difficulty)
             st.download_button(
                 label="📄 Descargar Reporte Formal (PDF)",
-                data=pdf_data,
+                data=bytes(pdf_data),
                 file_name=f"Reporte_Gestion_{scenario_id}_{regime}.pdf",
                 mime="application/pdf",
                 use_container_width=True

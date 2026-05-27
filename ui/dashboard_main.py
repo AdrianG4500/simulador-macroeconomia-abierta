@@ -1,261 +1,319 @@
 """
 ui/dashboard_main.py
 ====================
-Layout de visualización y juego principal durante los 10 turnos (Fase 4).
-Implementa un diseño Bloomberg-style inmersivo de 3 columnas:
-  - Sidebar: Controles de política cambiaria, fiscal y monetaria + shock exógeno + botón avanzar.
-  - Central Column: KPIs con sparklines + 5 pestañas de análisis gráfico interactivo Plotly.
-  - Right Column: Feed de noticias del periódico + Panel del Gabinete de Asesores con alertas preventivas.
+Layout de visualización y juego principal durante los 10 turnos (Fase 5.1).
+Implementa una arquitectura inmersiva de 3 sectores con theming dinámico avanzado:
+  - Sector Izquierdo (Sidebar - Panel de Control): Título, Selector de Temas, y inputs de política macroeconómica.
+  - Sector Central (Área de Trabajo Analítica): Cabecera con 6 KPIs macroeconómicos de alta resolución y 4 pestañas estratégicas con placeholders premium.
+  - Sector Derecho (Gabinete Presidencial): Moody's Rating Badge, Sala de Crisis con alertas de transmisión y placeholder del Asistente IA.
 """
 
 from __future__ import annotations
 
 import streamlit as st
-import pandas as pd
 from engine.state_manager_v2 import SimStateManagerV2
-from ui.kpi_panel import render_kpis_panel
-from ui.navigation import render_navigation
+from ui.styles import EXECUTIVE_CSS, STRATEGY_CSS
 from ui.charts_v2 import (
-    plot_pib_decomposition,
-    plot_economic_cycle,
-    plot_reserves_thermometer,
+    plot_gdp_decomposition,
+    plot_sectoral_composition,
+    plot_fiscal_odometer,
+    plot_butterfly_trade,
+    plot_exchange_intervention,
+    plot_salter_swan,
+    plot_islm_bp_dynamic,
+    plot_trilemma_ternary,
     plot_debt_snowball,
-    plot_islm_bp_dynamic
+    plot_business_cycle_clock,
+    plot_reelection_radar
 )
-
-
-def render_news_feed_column(state: dict) -> None:
-    """
-    Renderiza el feed de periódicos y noticias en una columna regular (Panel Derecho)
-    en lugar de saturar la barra lateral.
-    """
-    st.markdown("### 📰 Diario Oficial de la Nación")
-    
-    news_feed = state.get("news_feed", [])
-    if not news_feed:
-        st.info("📰 Aún no hay noticias reportadas en la administración.")
-        return
-        
-    # Invertir para mostrar las más recientes arriba
-    reversed_news = list(reversed(news_feed))
-    recent = reversed_news[:5]
-    older = reversed_news[5:]
-    
-    # Renderizar tarjetas visuales de noticias con HTML Premium
-    for item in recent:
-        sev = item.get("severity", "info")
-        t = item.get("t", 0)
-        msg = item["message"]
-        
-        # Estilos según severidad
-        card_bg = "#111e3b"
-        border_color = "#3b82f6"
-        hdr_color = "#93c5fd"
-        badge = "ℹ️ GENERAL"
-        
-        if sev == "critical":
-            card_bg = "#3b111a"
-            border_color = "#ef4444"
-            hdr_color = "#fca5a5"
-            badge = "🚨 CRÍTICO"
-        elif sev == "warning":
-            card_bg = "#3b2c11"
-            border_color = "#f59e0b"
-            hdr_color = "#fde047"
-            badge = "⚠️ ADVERTENCIA"
-            
-        headline = badge
-        narrative = msg
-        if ": " in msg:
-            parts = msg.split(": ", 1)
-            headline = parts[0]
-            narrative = parts[1]
-            
-        st.markdown(f"""
-        <div style='background-color: {card_bg}; border: 1px solid #1e293b; border-left: 5px solid {border_color}; border-radius: 6px; padding: 10px 12px; margin-bottom: 8px;'>
-          <div style='display: flex; justify-content: space-between; font-size: 0.7rem; font-weight: 700; margin-bottom: 2px;'>
-            <span style='color: {hdr_color}; text-transform: uppercase;'>{headline}</span>
-            <span style='color: #64748b;'>Semestre {t}</span>
-          </div>
-          <div style='font-size: 0.8rem; color: #cbd5e1; line-height: 1.4;'>{narrative}</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-    if older:
-        with st.expander("📁 Historial Completo de Periódicos", expanded=False):
-            for item in older:
-                t = item.get("t", 0)
-                msg = item["message"]
-                sev = item.get("severity", "info")
-                emoji = "ℹ️"
-                if sev == "critical":
-                    emoji = "🚨"
-                elif sev == "warning":
-                    emoji = "⚠️"
-                st.markdown(f"<div style='font-size: 0.8rem; margin-bottom: 4px;'><b>{emoji} Semestre {t}:</b> {msg}</div>", unsafe_allow_html=True)
-
-
-def render_advisors_panel(state: dict) -> None:
-    """
-    Renderiza las advertencias preventivas del Gabinete de Asesores de forma visual
-    en el Panel Derecho.
-    """
-    st.markdown("### 👥 Gabinete de Asesores")
-    
-    warnings = state.get("advisor_warnings", [])
-    
-    if not warnings:
-        st.markdown("""
-        <div style='background-color: #022c22; border: 1px solid #065f46; border-left: 4px solid #10b981; border-radius: 6px; padding: 12px; text-align: center;'>
-          <span style='color: #a7f3d0; font-size: 0.85rem; font-weight: 700;'>✅ GABINETE EN CALMA</span>
-          <p style='color: #cbd5e1; font-size: 0.75rem; margin: 4px 0 0 0;'>Las proyecciones del próximo semestre no detectan crisis de liquidez cambiaria o fiscal.</p>
-        </div>
-        """, unsafe_allow_html=True)
-        return
-        
-    # Renderizar cada alerta del asesor
-    for w in warnings:
-        advisor = w.get("advisor", "Asesor")
-        msg = w.get("message", "")
-        
-        # Definir color del asesor
-        color = "#f59e0b"  # Default
-        emoji = "👤"
-        if "Banco Central" in advisor:
-            color = "#3b82f6"
-            emoji = "🏦"
-        elif "Hacienda" in advisor:
-            color = "#8b5cf6"
-            emoji = "⚖️"
-        elif "Trabajo" in advisor:
-            color = "#10b981"
-            emoji = "🔨"
-        elif "Cambiario" in advisor:
-            color = "#ec4899"
-            emoji = "💱"
-            
-        st.markdown(f"""
-        <div style='background-color: #1e293b; border: 1px solid #334155; border-left: 4px solid {color}; border-radius: 6px; padding: 10px; margin-bottom: 8px;'>
-          <div style='font-size: 0.75rem; font-weight: 800; color: {color}; display: flex; align-items: center; gap: 4px;'>
-            <span>{emoji}</span> <span>{advisor.upper()}</span>
-          </div>
-          <div style='font-size: 0.75rem; color: #cbd5e1; margin-top: 4px; line-height: 1.3;'>{msg}</div>
-        </div>
-        """, unsafe_allow_html=True)
 
 
 def render_game_dashboard(mgr: SimStateManagerV2) -> None:
     """
-    Orquesta el layout de 3 columnas del juego principal durante los 10 turnos.
+    Orquesta el layout de 3 sectores y aplica el Theming Dinámico (Executive vs Strategy).
     """
     state = mgr.state
-    history = state["history"]
     
-    # 1. RENDERIZAR LA COLUMNA IZQUIERDA (Sidebar de Streamlit)
-    render_navigation()
-    
-    # 2. SEPARAR EL PANEL PRINCIPAL EN 2 COLUMNAS (Centro 70%, Derecho 30%)
-    col_center, col_right = st.columns([13, 5])
-    
-    # --- COLUMNA CENTRAL ---
-    with col_center:
-        # A. Renderizar los 6 KPIs macroeconómicos de alto impacto con sparklines
-        render_kpis_panel(history)
+    # ── TAREA 1: MOTOR DE THEMING DINÁMICO ──────────────────────────────────
+    if "theme" not in st.session_state:
+        st.session_state["theme"] = "strategy"  # Default theme
         
-        # B. Encabezado de Progreso y Marcador de Turno
-        current_score = history[-1]["score"]
-        progress_pct = float(mgr.t) / 10.0
+    # Inicializar toggle del tema en el sidebar
+    st.sidebar.markdown("<h2 style='text-align: center; margin-bottom: 0;'>⚙️ THEME </h2>", unsafe_allow_html=True)
+    theme_selection = st.sidebar.toggle(
+        "Activar Strategy Mode",
+        value=(st.session_state["theme"] == "strategy"),
+        help="Alterna entre el Executive Mode (Bloomberg Financiero Claro) y el Strategy Mode (Simulación Geopolítica Oscura)."
+    )
+    
+    # Actualizar estado de tema basado en el toggle
+    st.session_state["theme"] = "strategy" if theme_selection else "executive"
+    
+    # Inyectar el bloque de CSS puro dinámicamente
+    if st.session_state["theme"] == "strategy":
+        st.markdown(STRATEGY_CSS, unsafe_allow_html=True)
+    else:
+        st.markdown(EXECUTIVE_CSS, unsafe_allow_html=True)
         
+    # ── TAREA 2: SECTOR IZQUIERDO (Sidebar - Panel de Control) ────────────────
+    st.sidebar.title("🎮 Panel de Control")
+    st.sidebar.markdown("<p style='font-size: 0.8rem; text-align: center;'>Administración Macroeconómica Nacional</p>", unsafe_allow_html=True)
+    st.sidebar.divider()
+    
+    # Metadatos breves de administración actual
+    t_val = mgr.t
+    regime_ui = state.get("regime", "fixed").upper()
+    diff_ui = state.get("difficulty", "easy").upper()
+    
+    st.sidebar.markdown(f"""
+    <div class="macro-card" style="padding: 12px; margin-bottom: 15px; border-left: 4px solid #1570EF;">
+      <div style="font-size: 0.7rem; font-weight: 700; text-transform: uppercase;">Estado de la Gestión</div>
+      <div style="font-size: 1rem; font-weight: 700; margin-top: 4px;">Semestre actual: t = {t_val}/10</div>
+      <div style="font-size: 0.75rem; margin-top: 2px;">Régimen Cambiario: <b>{regime_ui}</b></div>
+      <div style="font-size: 0.75rem;">Dificultad de Partida: <b>{diff_ui}</b></div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Acordeones para simular sliders e inputs de políticas
+    with st.sidebar.expander("🏛️ Política Fiscal", expanded=False):
+        st.markdown("<p style='font-size:0.75rem; margin-bottom:10px;'>Ajuste la asignación de recursos y estructura impositiva:</p>", unsafe_allow_html=True)
+        st.slider("Gasto Corriente ($G_c$)", min_value=0.0, max_value=40.0, value=15.0, step=1.0, key="fiscal_gc_mock")
+        st.slider("Inversión Pública ($I_g$)", min_value=0.0, max_value=30.0, value=5.0, step=1.0, key="fiscal_ig_mock")
+        st.slider("Tasa de Impuesto al Consumo ($t_c$)", min_value=0.0, max_value=0.50, value=0.20, step=0.01, key="fiscal_tc_mock")
+        st.slider("Transferencias Directas ($Tr$)", min_value=0.0, max_value=20.0, value=0.0, step=1.0, key="fiscal_tr_mock")
+        
+    with st.sidebar.expander("🏦 Política Monetaria", expanded=False):
+        st.markdown("<p style='font-size:0.75rem; margin-bottom:10px;'>Controle el suministro de dinero doméstico y liquidez:</p>", unsafe_allow_html=True)
+        st.slider("Oferta Monetaria Exógena ($M$)", min_value=10.0, max_value=150.0, value=40.0, step=5.0, key="monetary_m_mock")
+        st.slider("Encaje Legal Bancario ($\\theta$)", min_value=0.0, max_value=0.30, value=0.10, step=0.01, key="monetary_theta_mock")
+        
+    with st.sidebar.expander("⚖️ Comercio Exterior y Cambios", expanded=False):
+        st.markdown("<p style='font-size:0.75rem; margin-bottom:10px;'>Ajuste las barreras y la paridad nominal cambiaria:</p>", unsafe_allow_html=True)
+        st.slider("Tipo de Cambio Nominal ($E$)", min_value=1.0, max_value=30.0, value=10.0, step=0.5, key="trade_e_mock")
+        st.slider("Arancel a las Importaciones ($\\tau$)", min_value=0.0, max_value=0.50, value=0.0, step=0.05, key="trade_tau_mock")
+        st.slider("Controles de Flujos de Capital ($k_c$)", min_value=0.0, max_value=0.90, value=0.0, step=0.1, key="trade_kc_mock")
+        
+    st.sidebar.divider()
+    
+    # ── EJECUCIÓN DEL TURNO Y REINICIO ──────────────────────────────────────
+    if st.sidebar.button("⏭️ APLICAR POLÍTICAS Y AVANZAR", use_container_width=True, type="primary"):
+        # 1. Capturamos los valores de los sliders desde el session_state
+        policy_changes = {
+            "G_c": st.session_state.get("fiscal_gc_mock", 15.0),
+            "I_g": st.session_state.get("fiscal_ig_mock", 5.0),
+            "t_c": st.session_state.get("fiscal_tc_mock", 0.20),
+            "Tr":  st.session_state.get("fiscal_tr_mock", 0.0),
+            "M":   st.session_state.get("monetary_m_mock", 40.0),
+            "theta": st.session_state.get("monetary_theta_mock", 0.10),
+            "E":   st.session_state.get("trade_e_mock", 10.0),
+            "tau": st.session_state.get("trade_tau_mock", 0.0),
+            "k_c": st.session_state.get("trade_kc_mock", 0.0),
+        }
+        
+        # 2. Le pasamos las políticas al motor y avanzamos el semestre
+        mgr.step_forward(policy_changes)
+        
+        # 3. Recargamos la interfaz para ver los resultados
+        st.rerun()
+
+    if st.sidebar.button("🔄 Reiniciar Simulación", use_container_width=True, type="secondary"):
+        # Borramos el motor de la memoria para volver al Turno 0
+        if "mgr" in st.session_state:
+            del st.session_state["mgr"]
+        st.rerun()
+
+    # ── DIVISIÓN GLOBAL EN COLUMNA CENTRAL Y DERECHA ────────────────────────
+    col_centro, col_derecha = st.columns([7, 3])
+    
+    # Extract historical/snapshot data for metrics representation
+    history = state.get("history", [{}])
+    last_snap = history[-1]
+    
+    pib_val = last_snap.get("Y", 100.0)
+    pi_t_val = last_snap.get("pi", 0.03) * 100.0
+    pi_nt_val = last_snap.get("pi_e", 0.03) * 100.0 - 0.2  # Mock NT inflation
+    u_val = last_snap.get("U", 0.05) * 100.0
+    r_val = last_snap.get("R", 50.0)
+    score_val = last_snap.get("score", 80)
+    
+    # ── TAREA 4: SECTOR CENTRAL (Área de Trabajo Analítica) ─────────────────
+    with col_centro:
+        st.markdown("<h1 style='margin-bottom: 2px;'>Terminal de Control Macroeconómico</h1>", unsafe_allow_html=True)
+        st.markdown("<p style='font-size: 0.9rem; margin-top: 0; color: #475467;'>Tablero analítico intertemporal de la administración soberana</p>", unsafe_allow_html=True)
+        
+        # 1. Cabecera Fija (Grid de 6 KPIs Premium)
         st.markdown(f"""
-        <div style='background-color: #111827; border: 1px solid #1e293b; border-radius: 8px; padding: 10px 16px; margin: 15px 0; display: flex; justify-content: space-between; align-items: center;'>
-          <div style='font-size: 0.85rem; font-weight: 700; color: #e2e8f0;'>
-            Semestre de Gobierno: <span style='color: #f59e0b;'>{mgr.t} / 10</span>
-          </div>
-          <div style='width: 45%; background-color: #1e293b; border-radius: 8px; height: 8px; overflow: hidden; margin: 0 10px;'>
-            <div style='width: {progress_pct*100}%; background: linear-gradient(90deg, #3b82f6 0%, #10b981 100%); height: 100%; border-radius: 8px;'></div>
-          </div>
-          <div style='font-size: 0.85rem; font-weight: 700; color: #e2e8f0;'>
-            Score Turno Actual: <span style='color: #10b981;'>{int(current_score)} / 100</span>
-          </div>
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px;">
+            <div class="macro-card">
+                <div style="font-size: 0.75rem; text-transform: uppercase; font-weight: 600;">PIB de Equilibrio (Y)</div>
+                <div class="kpi-number kpi-pib">{pib_val:.2f}</div>
+                <div style="font-size: 0.7rem; color: #10B981; font-weight: 700; margin-top: 4px;">&#9650; Sostenible</div>
+            </div>
+            <div class="macro-card">
+                <div style="font-size: 0.75rem; text-transform: uppercase; font-weight: 600;">Inflaci&#243;n Transable (&#960;_T)</div>
+                <div class="kpi-number kpi-inflation">{pi_t_val:.2f}%</div>
+                <div style="font-size: 0.7rem; color: #F79009; font-weight: 700; margin-top: 4px;">&#9679; Pass-through activo</div>
+            </div>
+            <div class="macro-card">
+                <div style="font-size: 0.75rem; text-transform: uppercase; font-weight: 600;">Inflaci&#243;n No-Transable (&#960;_NT)</div>
+                <div class="kpi-number kpi-inflation">{pi_nt_val:.2f}%</div>
+                <div style="font-size: 0.7rem; color: #10B981; font-weight: 700; margin-top: 4px;">&#9660; Estable</div>
+            </div>
+            <div class="macro-card">
+                <div style="font-size: 0.75rem; text-transform: uppercase; font-weight: 600;">Desempleo S-O (U)</div>
+                <div class="kpi-number kpi-default">{u_val:.2f}%</div>
+                <div style="font-size: 0.7rem; color: #10B981; font-weight: 700; margin-top: 4px;">&#9679; Pleno empleo (Ley Okun)</div>
+            </div>
+            <div class="macro-card">
+                <div style="font-size: 0.75rem; text-transform: uppercase; font-weight: 600;">Reservas L&#237;quidas (R)</div>
+                <div class="kpi-number kpi-pib">{r_val:.2f} MM</div>
+                <div style="font-size: 0.7rem; color: #10B981; font-weight: 700; margin-top: 4px;">&#9650; Respaldado</div>
+            </div>
+            <div class="macro-card" style="background: linear-gradient(135deg, rgba(56, 189, 248, 0.05) 0%, rgba(16, 112, 239, 0.05) 100%) !important; border-color: #38BDF8 !important;">
+                <div style="font-size: 0.75rem; text-transform: uppercase; font-weight: 600; color: #38BDF8;">Score Presidencial</div>
+                <div class="kpi-number" style="color: #38BDF8 !important;">{score_val} / 100</div>
+                <div style="font-size: 0.7rem; color: #38BDF8; font-weight: 700; margin-top: 4px;">&#9733; Reelecci&#243;n viable</div>
+            </div>
         </div>
         """, unsafe_allow_html=True)
         
-        # C. Panel de Pestañas con los 5 Gráficos Analíticos
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "📊 PIB Componentes",
-            "🕰️ Reloj del Ciclo",
-            "🌡️ Termómetro Reservas",
-            "❄️ Carga de Deuda",
-            "🏛️ IS-LM-BP Dinámico"
+        # 2. Sistema de Pestañas (Tabs)
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "🧱 Economía Real",
+            "💱 Sector Externo",
+            "📈 Mercados Financieros",
+            "📚 Historial & Decisiones"
         ])
         
         with tab1:
-            fig_pib = plot_pib_decomposition(history)
-            st.plotly_chart(fig_pib, use_container_width=True, key=f"fig_pib_{mgr.t}")
-            st.info(
-                "💡 **Análisis de Crowding-out:** Observe las barras de Consumo (C), Inversión (I) y Gasto (G). "
-                "Si aumenta G sin financiamiento genuino, puede desplazar a la inversión privada o deteriorar las exportaciones netas (NX)."
-            )
-            
+            st.markdown("### 🧱 Panel de Actividad Física y Producción")
+            col_t1a, col_t1b = st.columns(2)
+            with col_t1a:
+                fig_gdp = plot_gdp_decomposition(history)
+                st.plotly_chart(fig_gdp, use_container_width=True, theme=None)
+            with col_t1b:
+                fig_sectoral = plot_sectoral_composition(history)
+                st.plotly_chart(fig_sectoral, use_container_width=True, theme=None)
+            fig_fiscal = plot_fiscal_odometer(last_snap)
+            st.plotly_chart(fig_fiscal, use_container_width=True, theme=None)
+
         with tab2:
-            fig_ciclo = plot_economic_cycle(history)
-            st.plotly_chart(fig_ciclo, use_container_width=True, key=f"fig_ciclo_{mgr.t}")
-            st.info(
-                "💡 **Actividad Económica:** La trayectoria mapea Desempleo (U) e Inflación (π). "
-                "El cuadrante óptimo es el inferior derecho (Zona Ideal). Evite caer en el cuadrante superior izquierdo (Estanflación)."
-            )
-            
+            st.markdown("### 💱 Relaciones Comerciales y Tipo de Cambio")
+            fig_butterfly = plot_butterfly_trade(history)
+            st.plotly_chart(fig_butterfly, use_container_width=True, theme=None)
+            col_t2a, col_t2b = st.columns(2)
+            with col_t2a:
+                fig_intervention = plot_exchange_intervention(history)
+                st.plotly_chart(fig_intervention, use_container_width=True, theme=None)
+            with col_t2b:
+                fig_salter = plot_salter_swan(last_snap, mgr.state["structural"])
+                st.plotly_chart(fig_salter, use_container_width=True, theme=None)
+
         with tab3:
-            R_curr = history[-1]["R"]
-            R_0 = history[0]["R"]
-            fig_res = plot_reserves_thermometer(R_curr, R_0)
-            st.plotly_chart(fig_res, use_container_width=True, key=f"fig_res_{mgr.t}")
-            st.info(
-                "💡 **Sostenibilidad Cambiaria:** El indicador marca el nivel actual de reservas líquidas. "
-                "Si la aguja cae a la zona roja (<30%), se disparará un bank panic debido a la falta de liquidez externa."
-            )
-            
+            st.markdown("### 📈 Mercados Financieros y Deuda Soberana")
+            fig_islm = plot_islm_bp_dynamic(last_snap, mgr.state["structural"])
+            st.plotly_chart(fig_islm, use_container_width=True, theme=None)
+            col_t3a, col_t3b = st.columns(2)
+            with col_t3a:
+                fig_trilemma = plot_trilemma_ternary(last_snap)
+                st.plotly_chart(fig_trilemma, use_container_width=True, theme=None)
+            with col_t3b:
+                fig_deuda = plot_debt_snowball(history, last_snap)
+                st.plotly_chart(fig_deuda, use_container_width=True, theme=None)
+
         with tab4:
-            fig_deuda = plot_debt_snowball(history)
-            st.plotly_chart(fig_deuda, use_container_width=True, key=f"fig_deuda_{mgr.t}")
-            st.info(
-                "💡 **Sostenibilidad Fiscal:** Evalúa el porcentaje del gasto público destinado al servicio de intereses de la deuda. "
-                "Si el incremento del ratio supera los 3 puntos porcentuales en un semestre, se activará el cartel de 'Bola de Nieve'."
-            )
+            st.markdown("### 📚 Libro de Gestión Histórica y Decisiones")
+            col_t4a, col_t4b = st.columns(2)
+            with col_t4a:
+                fig_clock = plot_business_cycle_clock(history)
+                st.plotly_chart(fig_clock, use_container_width=True, theme=None)
+            with col_t4b:
+                fig_radar = plot_reelection_radar(history)
+                st.plotly_chart(fig_radar, use_container_width=True, theme=None)
+
+            # Libro Mayor de Decisiones en tiempo real
+            st.markdown("#### 📚 Libro Mayor de Políticas Aplicadas")
+            decisions_list = []
+            for snap in history:
+                pol = snap.get("policy_applied", {})
+                decisions_list.append({
+                    "Semestre (t)": snap["t"],
+                    "Régimen": pol.get("regime", "fixed").upper(),
+                    "Gasto Corriente (Gc)": pol.get("G_c", 0.0),
+                    "Inv. Pública (Ig)": pol.get("I_g", 0.0),
+                    "Impuesto (tc)": f"{pol.get('t_c', 0.0)*100:.1f}%" if "t_c" in pol else f"{pol.get('t', 0.0)*100:.1f}%",
+                    "Dinero (M)": pol.get("M", 0.0),
+                    "Tipo Cambio (E)": pol.get("E", 0.0),
+                    "Arancel (tau)": f"{pol.get('tau', 0.0)*100:.1f}%"
+                })
+            import pandas as pd
+            df_decisions = pd.DataFrame(decisions_list)
+            st.dataframe(df_decisions, use_container_width=True, hide_index=True)
             
-        with tab5:
-            # Controles interactivos específicos para la pestaña IS-LM-BP
-            col_sel1, col_sel2 = st.columns([2, 1])
-            with col_sel1:
-                max_t = max(1, mgr.t)
-                sel_t = st.slider(
-                    "Semestre a Analizar",
-                    min_value=1,
-                    max_value=max_t,
-                    value=max_t,
-                    key="islm_slider_t"
-                )
-            with col_sel2:
-                compare_prev = st.checkbox(
-                    "Comparar con t-1 (Punteado)",
-                    value=True,
-                    key="islm_compare_prev"
-                )
-                
-            fig_islm = plot_islm_bp_dynamic(mgr, sel_t, overlay_prev=compare_prev)
-            st.plotly_chart(fig_islm, use_container_width=True, key=f"fig_islm_{sel_t}_{compare_prev}")
-            st.info(
-                "💡 **Equilibrio General IS-LM-BP:** Las curvas determinan la intersección de equilibrio general en la tasa de interés "
-                "interna (r) y el PIB (Y). La BP posee una pendiente positiva bajo movilidad imperfecta. Active la comparación "
-                "para ver el desplazamiento de las curvas desde el semestre anterior."
-            )
-            
-    # --- COLUMNA DERECHA (Panel Derecho) ---
-    with col_right:
-        # A. Feed de noticias en tarjetas de periódico
-        render_news_feed_column(state)
+    # ── TAREA 3: SECTOR DERECHO (Gabinete Presidencial) ─────────────────────
+    with col_derecha:
+        st.markdown("<h2 style='margin-bottom: 12px;'>👥 Gabinete Presidencial</h2>", unsafe_allow_html=True)
         
+        # 1. Sello de Calificación Soberana (Moody's Badge)
+        # Extraer rating dinámico del snapshot actual
+        rating_val = last_snap.get("rating", "BBB")
+        
+        st.markdown(f"""
+        <div class="rating-badge" style="margin-bottom: 20px;">
+            <div class="rating-title">Calificación Moody's</div>
+            <div class="rating-value">{rating_val}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # 2. Feed de Noticias / Sala de Crisis
+        st.markdown("<h3 style='font-size:1.1rem; margin-bottom: 8px;'>📰 Periódicos & Crisis</h3>", unsafe_allow_html=True)
+        
+        # Si hay alertas del asesor reales, mostrarlas; sino, mostrar mocks premium definidos
+        advisor_warnings = state.get("advisor_warnings", [])
+        if advisor_warnings:
+            for w in advisor_warnings:
+                adv_name = w.get("advisor", "Gabinete")
+                adv_msg = w.get("message", "")
+                st.markdown(f"""
+                <div class="alert-card-critical">
+                    <div style="font-weight: 700; font-size: 0.8rem; text-transform: uppercase;">⚠️ Alerta del Gabinete</div>
+                    <div style="font-size: 0.75rem; font-weight: 700; color: #DC2626; margin-top: 2px;">{adv_name.upper()}</div>
+                    <div style="font-size: 0.75rem; margin-top: 4px; line-height: 1.3;">{adv_msg}</div>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            # Sala de Crisis con alertas mock Premium de transmisión
+            st.markdown("""
+            <!-- Alerta 1: Crisis Cambiaria -->
+            <div class="alert-card-critical">
+                <div style="font-weight: 700; font-size: 0.8rem; text-transform: uppercase;">🚨 Riesgo Cambiario Elevado</div>
+                <div style="font-size: 0.75rem; margin-top: 4px; line-height: 1.3;">Las reservas internacionales netas se encuentran en niveles críticos. Se proyecta que el banco central deba abandonar el tipo de cambio fijo o inyectar divisas vendiendo dólares.</div>
+            </div>
+            
+            <!-- Alerta 2: Crowding Out -->
+            <div class="alert-card">
+                <div style="font-weight: 700; font-size: 0.8rem; text-transform: uppercase;">⚠️ Alerta de Crowding Out</div>
+                <div style="font-size: 0.75rem; margin-top: 4px; line-height: 1.3;">El elevado gasto público corriente ($G_c$) está presionando al alza la tasa de interés real doméstica, contrayendo marginalmente la inversión productiva privada.</div>
+            </div>
+            
+            <!-- Alerta 3: Asesor de Hacienda -->
+            <div class="alert-card" style="border-left-color: #38BDF8 !important;">
+                <div style="font-weight: 700; font-size: 0.8rem; text-transform: uppercase; color: #38BDF8;">⚖️ Asesor de Hacienda</div>
+                <div style="font-size: 0.75rem; margin-top: 4px; line-height: 1.3;">El odómetro fiscal proyecta un déficit presupuestario del 4.2% del PIB para el próximo semestre debido al incremento en el pago de intereses de la deuda pública.</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
         st.divider()
         
-        # B. Advertencias del Gabinete de Asesores
-        render_advisors_panel(state)
+        # 3. Asistente IA (Contenedor Futuro)
+        st.markdown("<h3 style='font-size:1.1rem; margin-bottom: 8px;'>🤖 Asistente IA</h3>", unsafe_allow_html=True)
+        
+        st.markdown("""
+        <div class="macro-card" style="border-style: dotted; padding: 20px; text-align: center;">
+            <div style="font-size: 1.8rem; margin-bottom: 4px;">🧠</div>
+            <div style="font-weight: 700; font-size: 0.85rem; color: #38BDF8;">Gabinete Analítico IA</div>
+            <div style="font-size: 0.7rem; margin-top: 4px; line-height: 1.3;">
+                [Próximamente]<br>Recomendaciones en tiempo real basadas en teoría macroeconómica pura y optimización de bienestar social.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)

@@ -112,9 +112,9 @@ def test_ml_condition_holds():
     q_base    = 1.0
     q_devalued = 1.20   # Devaluacion del 20% en terminos reales
 
-    NX_base  = compute_NX(NX0, epsilon_x=0.80, epsilon_m=0.70, q=q_base,
+    NX_base,  _, _ = compute_NX(NX0, epsilon_x=0.80, epsilon_m=0.70, q=q_base,
                           m1=m1, Y=Y, j_curve_active=False)
-    NX_after = compute_NX(NX0, epsilon_x=0.80, epsilon_m=0.70, q=q_devalued,
+    NX_after, _, _ = compute_NX(NX0, epsilon_x=0.80, epsilon_m=0.70, q=q_devalued,
                           m1=m1, Y=Y, j_curve_active=False)
 
     assert NX_after > NX_base, (
@@ -142,9 +142,9 @@ def test_ml_condition_fails():
     q_base     = 1.0
     q_devalued = 1.20
 
-    NX_base  = compute_NX(NX0, epsilon_x=0.30, epsilon_m=0.40, q=q_base,
+    NX_base,  _, _ = compute_NX(NX0, epsilon_x=0.30, epsilon_m=0.40, q=q_base,
                           m1=m1, Y=Y, j_curve_active=False)
-    NX_after = compute_NX(NX0, epsilon_x=0.30, epsilon_m=0.40, q=q_devalued,
+    NX_after, _, _ = compute_NX(NX0, epsilon_x=0.30, epsilon_m=0.40, q=q_devalued,
                           m1=m1, Y=Y, j_curve_active=False)
 
     assert NX_after < NX_base, (
@@ -167,12 +167,12 @@ def test_j_curve_first_turn():
     q_devalued = 1.20  # simula devaluacion real
 
     # Turno 1: efecto J activo
-    NX_t1 = compute_NX(NX0, epsilon_x=epsilon_x, epsilon_m=epsilon_m,
+    NX_t1, _, _ = compute_NX(NX0, epsilon_x=epsilon_x, epsilon_m=epsilon_m,
                        q=q_devalued, m1=m1, Y=Y,
                        j_curve_active=True, epsilon_x_short=0.1)
 
     # Turno 2: ajuste normal (M-L cumplida)
-    NX_t2 = compute_NX(NX0, epsilon_x=epsilon_x, epsilon_m=epsilon_m,
+    NX_t2, _, _ = compute_NX(NX0, epsilon_x=epsilon_x, epsilon_m=epsilon_m,
                        q=q_devalued, m1=m1, Y=Y,
                        j_curve_active=False)
 
@@ -475,6 +475,238 @@ def test_deuda_crowding_out():
 
 
 # =============================================================================
+# TEST 13: AUDITORIA DE IDENTIDAD MACROECONOMICA (FASE 1.2)
+# =============================================================================
+
+def test_macroeconomic_identity_v21():
+    """
+    Verifica la identidad macroeconomica Y = C + I + G + NX para regimenes de TC
+    Fijo y Flexible con los parametros estructurales y de politica por defecto.
+    """
+    sp: StructuralParams = dict(DEFAULT_STRUCTURAL_PARAMS)  # type: ignore[assignment]
+    pi: PolicyInstruments = dict(DEFAULT_POLICY_INSTRUMENTS)  # type: ignore[assignment]
+    
+    Y_pot = 100.0
+    P_NT = 1.0
+    G = pi["G"]
+
+    # 1. Caso Tipo de Cambio FIJO
+    eq_fixed = eq_fixed_v2(sp=sp, pi=pi, Y_pot=Y_pot, P_NT=P_NT)
+    Y_fix = eq_fixed["Y"]
+    C_fix = eq_fixed["C"]
+    I_fix = eq_fixed["I_inv"]
+    NX_fix = eq_fixed["NX"]
+    G_fix = eq_fixed["G_total"]  # usar G_total del equilibrio, no del snapshot
+
+    assert abs(Y_fix - (C_fix + I_fix + G_fix + NX_fix)) < 1e-3, (
+        f"La identidad macroeconomica no cuadra en TC Fijo: "
+        f"Y={Y_fix:.6f}, C+I+G+NX={C_fix + I_fix + G_fix + NX_fix:.6f}, "
+        f"diferencia={abs(Y_fix - (C_fix + I_fix + G_fix + NX_fix)):.6f}"
+    )
+
+    # 2. Caso Tipo de Cambio FLEXIBLE
+    eq_flex = eq_flexible_v2(sp=sp, pi=pi, Y_pot=Y_pot, P_NT=P_NT, E_prev=pi["E"])
+    Y_flx = eq_flex["Y"]
+    C_flx = eq_flex["C"]
+    I_flx = eq_flex["I_inv"]
+    NX_flx = eq_flex["NX"]
+    G_flx = eq_flex["G_total"]
+
+    assert abs(Y_flx - (C_flx + I_flx + G_flx + NX_flx)) < 1e-3, (
+        f"La identidad macroeconomica no cuadra en TC Flexible: "
+        f"Y={Y_flx:.6f}, C+I+G+NX={C_flx + I_flx + G_flx + NX_flx:.6f}, "
+        f"diferencia={abs(Y_flx - (C_flx + I_flx + G_flx + NX_flx)):.6f}"
+    )
+
+
+# =============================================================================
+# TEST 14: AUDITORIA DE LA NUEVA CURVA BP CON SEPARACION UIP (FASE 1.2)
+# =============================================================================
+
+def test_bp_curve_uip_separation():
+    """
+    Verifica que la curva BP devuelva exactamente r_star + delta_E_expected + rho - (NX/f)
+    cuando se especifica una prima de riesgo rho.
+    """
+    r_star = 5.0
+    delta_E_expected = 0.10
+    NX = -2.0
+    f = 5.0
+    rho = 0.05
+    
+    result = compute_bp_curve(
+        r_star=r_star,
+        delta_E_expected=delta_E_expected,
+        NX=NX,
+        f=f,
+        rho=rho
+    )
+    
+    expected = r_star + delta_E_expected + rho - (NX / f)
+    
+    assert abs(result - expected) < 1e-10, (
+        f"La curva BP con separacion UIP falló. "
+        f"Resultado={result:.6f}, Esperado={expected:.6f}, "
+        f"diferencia={abs(result - expected):.6e}"
+    )
+
+
+# =============================================================================
+# TEST 15: TEST DE ARANCELES (FASE 2.2)
+# =============================================================================
+
+def test_tariff_transmission_v21():
+    """
+    Efecto de la introducción de aranceles (tau = 0.20).
+    Al introducir un arancel:
+    1. Se reducen las importaciones (M_imp_1 < M_imp_0).
+    2. Al reducirse las filtraciones al exterior, el multiplicador keynesiano
+       efectivo de gasto doméstico aumenta (k_m_1 > k_m_0).
+    """
+    sp: StructuralParams = dict(DEFAULT_STRUCTURAL_PARAMS)
+    pi: PolicyInstruments = dict(DEFAULT_POLICY_INSTRUMENTS)
+    pi["regime"] = "fixed"
+    
+    # Equilibrio base con arancel tau = 0.0
+    eq0 = eq_fixed_v2(sp=sp, pi=pi, Y_pot=100.0, P_NT=1.0)
+    k_m_0 = eq0["mult"]
+    M_imp_0 = eq0["M_imp"]
+    
+    # Equilibrio con arancel tau = 0.20
+    pi_new = dict(pi)
+    pi_new["tau"] = 0.20
+    eq1 = eq_fixed_v2(sp=sp, pi=pi_new, Y_pot=100.0, P_NT=1.0)
+    k_m_1 = eq1["mult"]
+    M_imp_1 = eq1["M_imp"]
+    
+    # El arancel reduce la fuga por importaciones: el multiplicador efectivo sube
+    assert k_m_1 > k_m_0, (
+        f"El multiplicador efectivo k_m_1 ({k_m_1:.4f}) debe ser mayor que "
+        f"k_m_0 ({k_m_0:.4f}) debido a la reducción de filtraciones (1-tau)."
+    )
+    
+    # Las importaciones brutas deben caer
+    assert M_imp_1 < M_imp_0, (
+        f"Las importaciones brutas M_imp_1 ({M_imp_1:.4f}) deben caer "
+        f"respecto a M_imp_0 ({M_imp_0:.4f}) tras el arancel."
+    )
+
+
+# =============================================================================
+# TEST 16: TEST DE CONTROLES DE CAPITAL EN LA CURVA BP (FASE 2.2)
+# =============================================================================
+
+def test_capital_controls_bp_v21():
+    """
+    Controles de capital k_c reducen la movilidad f_eff = f * (1 - k_c).
+    Bajo déficit comercial (NX = -10.0) y sensibilidad moderada (f = 5.0):
+    - Sin controles (k_c = 0.0) -> r_0
+    - Con controles fuertes (k_c = 0.8) -> r_1
+    La tasa r_1 requerida para el equilibrio externo debe subir violentamente.
+    """
+    r_star = 5.0
+    delta_E_expected = 0.0
+    NX = -10.0
+    f = 5.0
+    
+    # Escenario 1: Sin controles (k_c = 0)
+    k_c_0 = 0.0
+    f_eff_0 = max(f * (1.0 - k_c_0), 1e-4)
+    r_0 = compute_bp_curve(r_star=r_star, delta_E_expected=delta_E_expected, NX=NX, f=f_eff_0)
+    
+    # Escenario 2: Controles fuertes (k_c = 0.8)
+    k_c_1 = 0.8
+    f_eff_1 = max(f * (1.0 - k_c_1), 1e-4)
+    r_1 = compute_bp_curve(r_star=r_star, delta_E_expected=delta_E_expected, NX=NX, f=f_eff_1)
+    
+    # Tasa requerida debe subir significativamente para frenar salida de capitales
+    assert r_1 > r_0, (
+        f"La tasa requerida con controles fuertes ({r_1:.2f}%) debe ser "
+        f"mayor que sin controles ({r_0:.2f}%)."
+    )
+    assert abs(r_0 - 7.0) < TOL
+    assert abs(r_1 - 15.0) < TOL
+
+
+# =============================================================================
+# TEST 17: COMPOSICION DEL GASTO FISCAL (FASE 2.2)
+# =============================================================================
+
+def test_fiscal_composition_v21():
+    """
+    Compara gasto corriente vs. inversión pública con el mismo Gasto Total (G_total = 20):
+    1. G_c = 20, I_g = 0
+    2. G_c = 0, I_g = 20
+    En el período actual (estático), ambos deben generar exactamente el mismo nivel de PIB (Y).
+    """
+    sp: StructuralParams = dict(DEFAULT_STRUCTURAL_PARAMS)
+    pi_base: PolicyInstruments = dict(DEFAULT_POLICY_INSTRUMENTS)
+    pi_base["regime"] = "fixed"
+    
+    # Escenario 1: Solo gasto corriente
+    pi_1 = dict(pi_base)
+    pi_1["G_c"] = 20.0
+    pi_1["I_g"] = 0.0
+    eq_1 = eq_fixed_v2(sp=sp, pi=pi_1, Y_pot=100.0, P_NT=1.0)
+    
+    # Escenario 2: Solo inversión pública
+    pi_2 = dict(pi_base)
+    pi_2["G_c"] = 0.0
+    pi_2["I_g"] = 20.0
+    eq_2 = eq_fixed_v2(sp=sp, pi=pi_2, Y_pot=100.0, P_NT=1.0)
+    
+    # A nivel estático, la demanda agregada total de G_total = 20 es idéntica
+    assert abs(eq_1["Y"] - eq_2["Y"]) < TOL, (
+        f"El PIB estático Y debe ser idéntico con igual G_total. "
+        f"Y_1={eq_1['Y']:.6f}, Y_2={eq_2['Y']:.6f}"
+    )
+    assert abs(eq_1["G_total"] - 20.0) < TOL
+    assert abs(eq_2["G_total"] - 20.0) < TOL
+
+
+def test_dutch_disease_v21():
+    """
+    Verifica geométricamente y analíticamente el fenómeno de la Enfermedad Holandesa (Fase 3.2):
+    Una apreciación nominal extrema del tipo de cambio (reducción drástica de E) reduce
+    el precio transable P_T y consecuentemente el tipo de cambio real interno q_int = P_T / P_NT,
+    lo que devora la participación del sector transable en la composición del PIB (share_T_1 < share_T_0).
+    """
+    sp: StructuralParams = dict(DEFAULT_STRUCTURAL_PARAMS)
+    pi: PolicyInstruments = dict(DEFAULT_POLICY_INSTRUMENTS)
+    
+    Y_pot = 100.0
+    P_NT = 1.0
+    
+    # 1. Equilibrio inicial con E_0 = 10.0
+    pi_0 = dict(pi)
+    pi_0["E"] = 10.0
+    pi_0["regime"] = "fixed"
+    eq_0 = eq_fixed_v2(sp=sp, pi=pi_0, Y_pot=Y_pot, P_NT=P_NT)
+    
+    q_int_0 = eq_0["q_int"]
+    share_T_0 = eq_0["Y_T"] / eq_0["Y"]
+    
+    # 2. Equilibrio final con apreciación nominal extrema E_1 = 2.0
+    pi_1 = dict(pi)
+    pi_1["E"] = 2.0
+    pi_1["regime"] = "fixed"
+    eq_1 = eq_fixed_v2(sp=sp, pi=pi_1, Y_pot=Y_pot, P_NT=P_NT)
+    
+    q_int_1 = eq_1["q_int"]
+    share_T_1 = eq_1["Y_T"] / eq_1["Y"]
+    
+    # Validaciones teóricas de Enfermedad Holandesa:
+    assert q_int_1 < q_int_0, (
+        f"El TCR interno q_int debería caer tras una apreciación real. "
+        f"q_int_0={q_int_0:.4f}, q_int_1={q_int_1:.4f}"
+    )
+    assert share_T_1 < share_T_0, (
+        f"El sector transable debería contraerse proporcionalmente (Enfermedad Holandesa). "
+        f"share_T_0={share_T_0:.2%}, share_T_1={share_T_1:.2%}"
+    )
+
+
+# =============================================================================
 # RUNNER DIRECTO (sin pytest)
 # =============================================================================
 
@@ -492,11 +724,17 @@ if __name__ == "__main__":
         ("test_crawling_peg",             test_crawling_peg),
         ("test_salter_swan_integrated",   test_salter_swan_integrated),
         ("test_deuda_crowding_out",       test_deuda_crowding_out),
+        ("test_macroeconomic_identity_v21", test_macroeconomic_identity_v21),
+        ("test_bp_curve_uip_separation",  test_bp_curve_uip_separation),
+        ("test_tariff_transmission_v21",  test_tariff_transmission_v21),
+        ("test_capital_controls_bp_v21",  test_capital_controls_bp_v21),
+        ("test_fiscal_composition_v21",   test_fiscal_composition_v21),
+        ("test_dutch_disease_v21",        test_dutch_disease_v21),
     ]
 
     passed, failed = 0, 0
     print("\n" + "="*65)
-    print("  SUITE DE VERIFICACION ANALITICA — Motor V2.0")
+    print("  SUITE DE VERIFICACION ANALITICA — Motor V2.1")
     print("="*65)
 
     for name, fn in tests:
@@ -512,7 +750,7 @@ if __name__ == "__main__":
     print("-"*65)
     print(f"  Resultado: {passed}/{len(tests)} tests pasaron")
     if failed == 0:
-        print("  CRITERIO DE ACEPTACION FASE 1: CUMPLIDO (12/12)")
+        print(f"  CRITERIO DE ACEPTACION FASE 2: CUMPLIDO ({len(tests)}/{len(tests)})")
     else:
         print(f"  CRITERIO NO CUMPLIDO: {failed} tests fallaron")
     print("="*65 + "\n")

@@ -17,7 +17,7 @@ Este módulo NO importa de engine/ ni de ui/.
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Optional, TypedDict
 
 
 # ── Tipos de datos ────────────────────────────────────────────────────────────
@@ -30,10 +30,17 @@ class StructuralParams(TypedDict):
     # Bloque consumo e inversión
     c0:        float   # Consumo autónomo
     c1:        float   # Propensión marginal a consumir
-    t:         float   # Tasa impositiva proporcional (∈ [0,1])
+    t:         float   # Tasa impositiva proporcional (∈ [0,1]) — retrocompat. con t_c
     I0:        float   # Inversión autónoma
     b:         float   # Sensibilidad inversión–tasa de interés
+    rho_k:     float   # Sensibilidad de inversión a impuestos corporativos
     NX0:       float   # Exportaciones netas autónomas
+
+    # Bloque sector externo desagregado
+    x0:        float   # Exportaciones autónomas (nivel base)
+    x1:        float   # Sensibilidad exportaciones a demanda externa (Y_star)
+    Y_star:    float   # PIB del resto del mundo (exógeno)
+    m0:        float   # Importaciones autónomas (nivel base)
 
     # Bloque comercio exterior y tipo de cambio
     epsilon_x: float   # Elasticidad-precio de exportaciones (condición M-L)
@@ -69,12 +76,33 @@ class PolicyInstruments(TypedDict):
     Variables controladas por el jugador cada turno.
     El régimen cambiario determina cuál instrumento es exógeno.
     """
-    G:           float  # Gasto público
+    # Gasto fiscal desagregado (G_total = G_c + I_g)
+    G_c:         float  # Gasto corriente del gobierno
+    I_g:         float  # Inversión pública
+    Tr:          float  # Transferencias a hogares (afecta demanda vía consumo)
+
+    # Tributación dual
+    t_c:         float  # Tasa impositiva al consumo / ingreso (reemplaza 't')
+    t_k:         float  # Tasa impositiva corporativa (afecta I_inv vía rho_k)
+
+    # Instrumentos comerciales
+    tau:         float  # Arancel a importaciones ∈ [0, 1)
+    s_x:         float  # Subsidio a exportaciones ∈ [0, 1)
+
+    # Controles de flujo de capitales y encaje
+    k_c:         float  # Controles de capital ∈ [0, 1); 0 = libre movilidad
+    theta:       float  # Encaje legal (reserva fraccionaria) ∈ [0, 1)
+
+    # Cambiario y monetario
     E:           float  # Tipo de cambio nominal (exógeno bajo TC fijo / crawling)
     M:           float  # Oferta monetaria (exógena bajo TC flexible)
     r_star:      float  # Tasa de interés internacional (exógena)
-    regime:      str    # "fixed" | "flexible" | "crawling_peg"
+    regime:      str    # "fixed" | "flexible" | "crawling_peg" | "dirty_float"
     crawl_rate:  float  # Tasa de deslizamiento mensual (solo crawling_peg)
+    E_band_upper: Optional[float]  # Banda superior para flotación sucia
+
+    # Retrocompatibilidad: G = G_c + I_g calculado internamente
+    G:           float  # Gasto público total (derivado; mantenido para snapshot)
 
 
 class EquilibriumV2(TypedDict):
@@ -86,15 +114,22 @@ class EquilibriumV2(TypedDict):
     r:          float  # Tasa de interés de equilibrio
     E_endo:     float  # Tipo de cambio endógeno (NaN bajo TC fijo)
     M_endo:     float  # Oferta monetaria endógena (NaN bajo TC flexible)
-    NX:         float  # Exportaciones netas de equilibrio
+    NX:         float  # Exportaciones netas de equilibrio (X - M_imp)
+    X:          float  # Exportaciones brutas de equilibrio
+    M_imp:      float  # Importaciones brutas de equilibrio
+    G_total:    float  # Gasto público total (G_c + I_g)
     C:          float  # Consumo privado
-    I_inv:      float  # Inversión
+    I_inv:      float  # Inversión privada
     mult:       float  # Multiplicador keynesiano
     P_local:    float  # Nivel de precios doméstico
     q_real:     float  # Tipo de cambio real
     M_real:     float  # Saldos reales (M / P_local)
     gap:        float  # Brecha del producto (Y - Y_pot) / Y_pot
-    A_domestic: float  # Absorción doméstica (C + I + G)
+    A_domestic: float  # Absorción doméstica (C + I_inv + G_total)
+    P_T:        float  # Precio de bienes transables
+    q_int:      float  # Tipo de cambio real interno (P_T / P_NT)
+    Y_T:        float  # PIB del sector transable
+    Y_NT:       float  # PIB del sector no-transable
 
 
 class SalterSwanResult(TypedDict):
@@ -120,10 +155,19 @@ DEFAULT_STRUCTURAL_PARAMS: StructuralParams = {
     # Consumo e inversión
     "c0":        10.0,   # Consumo autónomo
     "c1":        0.75,   # PMgC
-    "t":         0.20,   # Tasa impositiva: 20% del ingreso
+    "t":         0.20,   # Tasa impositiva retrocompat. (= t_c por defecto)
     "I0":        15.0,   # Inversión autónoma
     "b":         2.0,    # Sensibilidad I a r
-    "NX0":       5.0,    # NX autónomo
+    "rho_k":     0.5,    # Sensibilidad de I a tasa corporativa t_k
+    "NX0":       5.0,    # NX autónomo (= x0 - m0 cuando Y_star=0)
+
+    # Sector externo desagregado (opt-in)
+    # Cuando x0=m0=0 el motor usa NX0 directamente (modo retrocompat. V2.0).
+    # Los escenarios concretos pueden activar el modo desagregado seteando x0 y m0.
+    "x0":        0.0,    # Exportaciones autónomas (0 = modo legacy NX0)
+    "x1":        0.0,    # Sensibilidad X a Y_star (0 = ignorado)
+    "Y_star":    0.0,    # PIB mundial (0 = ignorado en modo legacy)
+    "m0":        0.0,    # Importaciones autónomas (0 = modo legacy)
 
     # Comercio exterior — condición Marshall-Lerner
     "epsilon_x": 0.80,   # Elasticidad exportaciones (suma M-L: 0.80+0.70=1.50 > 1 ✓)
@@ -155,12 +199,28 @@ DEFAULT_STRUCTURAL_PARAMS: StructuralParams = {
 }
 
 DEFAULT_POLICY_INSTRUMENTS: PolicyInstruments = {
-    "G":          20.0,
+    # Gasto fiscal desagregado
+    "G_c":        15.0,  # Gasto corriente
+    "I_g":         5.0,  # Inversión pública
+    "Tr":          0.0,  # Transferencias
+    # Tributación dual
+    "t_c":         0.20, # Tasa impositiva al consumo/ingreso
+    "t_k":         0.20, # Tasa corporativa
+    # Instrumentos comerciales
+    "tau":         0.0,  # Arancel (0 = libre comercio)
+    "s_x":         0.0,  # Subsidio exportaciones (0 = ninguno)
+    # Controles de flujo
+    "k_c":         0.0,  # Controles de capital (0 = libre movilidad)
+    "theta":       0.0,  # Encaje legal (0 = sin encaje adicional)
+    # Cambiario y monetario
     "E":          10.0,
     "M":          40.0,
     "r_star":      5.0,
     "regime":     "fixed",
     "crawl_rate":  0.02,
+    "E_band_upper": None,
+    # Retrocompatibilidad: G = G_c + I_g
+    "G":          20.0,
 }
 
 
@@ -183,6 +243,8 @@ SCENARIO_PRESETS: dict[str, dict] = {
         },
         "policy": {
             **DEFAULT_POLICY_INSTRUMENTS,
+            "G_c":    12.0,
+            "I_g":     3.0,
             "G":      15.0,
             "E":      10.0,
             "r_star":  8.0,
@@ -202,12 +264,15 @@ SCENARIO_PRESETS: dict[str, dict] = {
         "structural": {
             **DEFAULT_STRUCTURAL_PARAMS,
             "NX0":       15.0,
+            "x0":        20.0,   # Exportaciones autónomas elevadas
             "epsilon_x":  1.20,
             "epsilon_m":  0.80,
             "f":          10.0,   # Alta movilidad de capitales
         },
         "policy": {
             **DEFAULT_POLICY_INSTRUMENTS,
+            "G_c":    17.0,
+            "I_g":     5.0,
             "G":      22.0,
             "E":      10.0,
             "r_star":  3.0,
@@ -233,7 +298,9 @@ SCENARIO_PRESETS: dict[str, dict] = {
         },
         "policy": {
             **DEFAULT_POLICY_INSTRUMENTS,
-            "G":       25.0,
+            "G_c":    20.0,
+            "I_g":     5.0,
+            "G":      25.0,
             "M":       50.0,
             "r_star":  10.0,
             "regime":  "flexible",

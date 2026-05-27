@@ -29,8 +29,12 @@ SCENARIO_PRESETS_V3: dict[str, dict] = {
         ],
         "structural": {
             **DEFAULT_STRUCTURAL_PARAMS,
-            "c0": 1.0,          # Calibrado para Y0 estable ~ 105
-            "I0": 2.0,          # Calibrado para Y0 estable ~ 105
+            "c0": 15.0,          # Calibrado para Y0 estable ~ 105
+            "I0": 15.0,          # Calibrado para Y0 estable ~ 105
+            "x0": 12.0,         # Sector externo desagregado calibrado
+            "x1": 0.10,
+            "Y_star": 30.0,
+            "m0": 7.0,
             "g_pot": 0.03,
             "U_n": 0.03,
             "f": 10.0,         # Alta movilidad de capitales
@@ -42,6 +46,8 @@ SCENARIO_PRESETS_V3: dict[str, dict] = {
         },
         "policy": {
             **DEFAULT_POLICY_INSTRUMENTS,
+            "G_c": 20.0,
+            "I_g": 0.0,
             "G": 20.0,
             "E": 10.0,
             "M": 45.0,
@@ -69,6 +75,10 @@ SCENARIO_PRESETS_V3: dict[str, dict] = {
             **DEFAULT_STRUCTURAL_PARAMS,
             "c0": 10.0,
             "I0": 20.0,
+            "x0": 12.0,         # Sector externo desagregado calibrado
+            "x1": 0.10,
+            "Y_star": 30.0,
+            "m0": 7.0,
             "NX0": -10.0,
             "t": 0.25,         # Mayor recaudación para evitar default soberano antes que R
             "m1": 0.20,        # Drenaje controlado de reservas
@@ -105,6 +115,10 @@ SCENARIO_PRESETS_V3: dict[str, dict] = {
             **DEFAULT_STRUCTURAL_PARAMS,
             "c0": 26.0,        # Calibrado para Y0 ~ 81 y U0 ~ 15%
             "I0": 20.0,        # Calibrado para Y0 ~ 81 y U0 ~ 15%
+            "x0": 12.0,         # Sector externo desagregado calibrado
+            "x1": 0.10,
+            "Y_star": 30.0,
+            "m0": 7.0,
             "c1": 0.65,
             "t": 0.20,
             "m1": 0.15,
@@ -145,8 +159,12 @@ SCENARIO_PRESETS_V3: dict[str, dict] = {
         ],
         "structural": {
             **DEFAULT_STRUCTURAL_PARAMS,
-            "c0": 35.0,        # Calibrado para U0 ~ 22%
-            "I0": 35.0,        # Calibrado para U0 ~ 22%
+            "c0": 20.0,        # Calibrado para U0 ~ 22%
+            "I0": 15.0,        # Calibrado para U0 ~ 22%
+            "x0": 12.0,         # Sector externo desagregado calibrado
+            "x1": 0.10,
+            "Y_star": 30.0,
+            "m0": 7.0,
             "c1": 0.60,
             "t": 0.25,
             "NX0": -12.0,
@@ -173,7 +191,7 @@ SCENARIO_PRESETS_V3: dict[str, dict] = {
             "P_NT": 1.0,
             "pi_e": 0.70,      # Calibrado para alta inercia
             "R": 10.0,         # Calibrado
-            "B": 50.0,         # Calibrado
+            "B": 60.0,         # Calibrado
         }
     }
 }

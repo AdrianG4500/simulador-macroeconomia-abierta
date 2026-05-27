@@ -249,7 +249,7 @@ def test_game_over_hyperinflation():
     la inflacion debe superar el 150% y disparar el Game Over.
     """
     mgr = SimStateManagerV2()
-    mgr.calibrate("Economia_Saludable")
+    mgr.calibrate("Economia_Saludable", custom_params={"c0": 30.0, "I0": 30.0, "I_g": 0.0})
 
     # Configurar parametros para garantizar hiperinflacion
     mgr.state["structural"]["alpha_inf"] = 3.0    # Curva de Phillips muy empinada
@@ -390,8 +390,8 @@ def test_endgame_delta_score():
     - total_score debe ser la suma de scores de los turnos jugados
     """
     mgr = SimStateManagerV2()
-    # Dar suficientes reservas para aguantar 10 turnos de deficit comercial
-    mgr.calibrate("Economia_Saludable", custom_initial_state={"R": 200.0})
+    # Dar suficientes reservas para aguantar 10 turnos de deficit comercial, y baja deuda para evitar default
+    mgr.calibrate("Economia_Saludable", custom_initial_state={"R": 200.0, "B": 10.0})
     mgr.start_simulation("fixed")
 
     for _ in range(10):
@@ -457,6 +457,90 @@ def test_endgame_delta_score():
 
 
 # =============================================================================
+def test_sovereign_risk_crowding_out_v21():
+    """
+    Verifica la dinámica de Deuda Soberana y Crowding Out (Fase 3.2):
+    1. Evalúa compute_sovereign_risk para confirmar que deuda hiper-tóxica (B = 500)
+       da rating 'DEFAULT' y rho masivo (0.25).
+    2. Pasa rho al solver y confirma que la tasa de interés interna r se dispara (r_B > r_A).
+    3. Confirma que la Inversión Privada colapsa debido a esta tasa extrema (I_inv_B < I_inv_A),
+       demostrando el crowding out por riesgo país.
+    """
+    from engine.dynamics_v2 import compute_sovereign_risk
+    from engine.core_v2 import eq_fixed_v2
+    from config.parameters_v2 import DEFAULT_STRUCTURAL_PARAMS, DEFAULT_POLICY_INSTRUMENTS
+
+    Y_pot = 100.0
+    R = 50.0
+
+    # 1. Evaluar riesgo soberano para Deuda Baja vs Deuda Hiper-tóxica
+    rho_A, rating_A = compute_sovereign_risk(B=10.0, Y_pot=Y_pot, R=R)
+    rho_B, rating_B = compute_sovereign_risk(B=500.0, Y_pot=Y_pot, R=R)
+
+    assert rating_A == "A", f"Deuda baja debería tener calificación A. Got: {rating_A}"
+    assert rating_B == "DEFAULT", f"Deuda hiper-tóxica debería tener calificación DEFAULT. Got: {rating_B}"
+    assert rho_B > rho_A, f"La prima rho de B debería ser mayor. rho_A={rho_A}, rho_B={rho_B}"
+    assert abs(rho_B - 0.25) < 1e-6, f"La prima rho en DEFAULT debería ser 0.25. Got: {rho_B}"
+
+    # 2. Pasar rho al solver eq_fixed_v2
+    sp = dict(DEFAULT_STRUCTURAL_PARAMS)
+    pi = dict(DEFAULT_POLICY_INSTRUMENTS)
+    pi["regime"] = "fixed"
+
+    eq_A = eq_fixed_v2(sp=sp, pi=pi, Y_pot=Y_pot, P_NT=1.0, rho=rho_A)
+    eq_B = eq_fixed_v2(sp=sp, pi=pi, Y_pot=Y_pot, P_NT=1.0, rho=rho_B)
+
+    # 3. Confirmar transmisión de tasa de interés e inversión
+    assert eq_B["r"] > eq_A["r"], (
+        f"La tasa de interés r se debería disparar con mayor prima de riesgo. "
+        f"r_A={eq_A['r']:.4f}, r_B={eq_B['r']:.4f}"
+    )
+    assert eq_B["I_inv"] < eq_A["I_inv"], (
+        f"La inversión privada I_inv debería colapsar por crowding out. "
+        f"I_A={eq_A['I_inv']:.4f}, I_B={eq_B['I_inv']:.4f}"
+    )
+
+
+# =============================================================================
+# TEST 10: FLOTACIÓN SUCIA (DIRTY FLOAT - FASE 4.1)
+# =============================================================================
+
+def test_dirty_float_v21():
+    """
+    Verifica el comportamiento del régimen de Flotación Sucia (Fase 4.1):
+    1. Calibra Economia_Saludable con régimen 'dirty_float'.
+    2. Establece una banda cambiaria superior E_band_upper = 11.0.
+    3. Provoca una devaluación severa incrementando la oferta monetaria (M = 80.0).
+    4. Confirma que el tipo de cambio nominal se acota exactamente en 11.0.
+    5. Confirma que se registra una intervención cambiaria positiva (FX_intervention > 0)
+       y que las reservas internacionales disminuyen por ese monto.
+    """
+    mgr = SimStateManagerV2()
+    # Calibrar y setear régimen
+    mgr.calibrate("Economia_Saludable", "easy")
+    mgr.state["regime"] = "dirty_float"
+    mgr.state["policy"]["regime"] = "dirty_float"
+
+    # Registrar R anterior
+    R_prev = mgr.state["R"]
+
+    # Forzar banda superior y devaluación severa vía M = 80.0
+    # Bajo dirty_float, E_band_upper por defecto es E_prev * 1.10 (11.0)
+    mgr.start_simulation("dirty_float")
+    snap = mgr.step_forward({"M": 80.0, "E_band_upper": 11.0})
+
+    assert snap["E"] == 11.0, f"El tipo de cambio nominal debería estar acotado en 11.0. Got: {snap['E']}"
+    assert snap["FX_intervention"] > 0.0, f"Debería registrarse una intervención cambiaria. Got: {snap['FX_intervention']}"
+
+    # Verificar drenaje físico de reservas
+    expected_R = round(R_prev - snap["FX_intervention"], 6)
+    assert abs(snap["R"] - expected_R) < 1e-5, (
+        f"Las reservas internacionales no cuadran tras la intervención. "
+        f"R={snap['R']}, Esperado={expected_R}"
+    )
+
+
+# =============================================================================
 # RUNNER DIRECTO (sin pytest)
 # =============================================================================
 
@@ -470,6 +554,8 @@ if __name__ == "__main__":
         ("test_debt_snowball",            test_debt_snowball),
         ("test_crawling_peg_10_turns",    test_crawling_peg_10_turns),
         ("test_endgame_delta_score",      test_endgame_delta_score),
+        ("test_sovereign_risk_crowding_out_v21", test_sovereign_risk_crowding_out_v21),
+        ("test_dirty_float_v21",          test_dirty_float_v21),
     ]
 
     passed, failed = 0, 0
@@ -490,7 +576,7 @@ if __name__ == "__main__":
     print("-" * 65)
     print(f"  Resultado: {passed}/{len(tests)} tests pasaron")
     if failed == 0:
-        print("  CRITERIO DE ACEPTACION FASE 2: CUMPLIDO (8/8)")
+        print("  CRITERIO DE ACEPTACION FASE 2: CUMPLIDO (10/10)")
     else:
         print(f"  CRITERIO NO CUMPLIDO: {failed} tests fallaron")
     print("=" * 65 + "\n")

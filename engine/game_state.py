@@ -85,6 +85,12 @@ class TurnSnapshot(TypedDict):
     B:              float   # Deuda pública acumulada
     R:              float   # Reservas internacionales
 
+    # Economía Dual (FASE 3.1)
+    Y_T:            float   # PIB sector transable
+    Y_NT:           float   # PIB sector no-transable
+    rho:            float   # Prima de riesgo soberano (riesgo país)
+    rating:         str     # Calificación crediticia soberana
+
     # Análisis Salter-Swan
     zone_ss:        str     # Zona de Salter-Swan: "I" | "II" | "III" | "IV"
 
@@ -95,6 +101,7 @@ class TurnSnapshot(TypedDict):
     mult:           float   # Multiplicador keynesiano vigente
     policy_applied: dict    # Copia de PolicyInstruments usados este turno
     events_triggered: list  # Eventos exógenos/endógenos ocurridos
+    FX_intervention: float  # Intervención cambiaria del Banco Central (Fase 4.1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

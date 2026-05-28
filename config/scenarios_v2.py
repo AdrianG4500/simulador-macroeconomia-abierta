@@ -123,8 +123,8 @@ SCENARIO_PRESETS_V3: dict[str, dict] = {
             "t": 0.20,
             "m1": 0.15,
             "NX0": -5.0,
-            "epsilon_x": 0.40,  # Bienes primarios inelásticos
-            "epsilon_m": 0.45,
+            "epsilon_x": 0.58,  # Bienes primarios inelásticos (aumentado en 45% de 0.40)
+            "epsilon_m": 0.6525,  # Aumentado en 45% de 0.45
             "f": 2.0,           # Baja movilidad de capitales
             "alpha_PT": 0.50,   # Fuerte exposición externa
             "beta_PT": 0.35,    # Alto pass-through cambiario
@@ -168,8 +168,8 @@ SCENARIO_PRESETS_V3: dict[str, dict] = {
             "c1": 0.60,
             "t": 0.25,
             "NX0": -12.0,
-            "epsilon_x": 0.30,  # Exportaciones rígidas
-            "epsilon_m": 0.35,
+            "epsilon_x": 0.435,  # Exportaciones rígidas (aumentado en 45% de 0.30)
+            "epsilon_m": 0.5075,  # Aumentado en 45% de 0.35
             "f": 1.5,           # Fuga de capitales latente
             "alpha_PT": 0.60,   # Exposición cambiaria extrema
             "beta_PT": 0.45,    # Pass-through muy elevado

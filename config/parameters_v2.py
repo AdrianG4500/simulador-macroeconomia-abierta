@@ -158,7 +158,7 @@ DEFAULT_STRUCTURAL_PARAMS: StructuralParams = {
     "t":         0.20,   # Tasa impositiva retrocompat. (= t_c por defecto)
     "I0":        15.0,   # Inversión autónoma
     "b":         2.0,    # Sensibilidad I a r
-    "rho_k":     0.5,    # Sensibilidad de I a tasa corporativa t_k
+    "rho_k":     5.0,    # Sensibilidad de I a tasa corporativa t_k
     "NX0":       5.0,    # NX autónomo (= x0 - m0 cuando Y_star=0)
 
     # Sector externo desagregado (opt-in)
@@ -170,8 +170,8 @@ DEFAULT_STRUCTURAL_PARAMS: StructuralParams = {
     "m0":        0.0,    # Importaciones autónomas (0 = modo legacy)
 
     # Comercio exterior — condición Marshall-Lerner
-    "epsilon_x": 0.80,   # Elasticidad exportaciones (suma M-L: 0.80+0.70=1.50 > 1 ✓)
-    "epsilon_m": 0.70,   # Elasticidad importaciones
+    "epsilon_x": 1.16,   # Elasticidad exportaciones (suma M-L: 1.16+1.015=2.175 > 1 ✓)
+    "epsilon_m": 1.015,  # Elasticidad importaciones
     "m1":        0.15,   # Propensión marginal a importar
 
     # Monetario
@@ -211,7 +211,7 @@ DEFAULT_POLICY_INSTRUMENTS: PolicyInstruments = {
     "s_x":         0.0,  # Subsidio exportaciones (0 = ninguno)
     # Controles de flujo
     "k_c":         0.0,  # Controles de capital (0 = libre movilidad)
-    "theta":       0.0,  # Encaje legal (0 = sin encaje adicional)
+    "theta":       0.10,  # Encaje legal (reserva fraccionaria base 10%)
     # Cambiario y monetario
     "E":          10.0,
     "M":          40.0,
@@ -235,8 +235,8 @@ SCENARIO_PRESETS: dict[str, dict] = {
             "NX0":       -3.0,
             "I0":        -5.0,
             "c1":         0.65,
-            "epsilon_x":  0.30,   # Baja elasticidad (exportaciones primarias)
-            "epsilon_m":  0.35,   # Importaciones inelásticas
+            "epsilon_x":  0.435,   # Aumentado en 45% (original: 0.30)
+            "epsilon_m":  0.5075,  # Aumentado en 45% (original: 0.35)
             "f":           1.0,   # Baja movilidad de capitales
             "alpha_PT":    0.55,  # Alta exposición a bienes transables
             "beta_PT":     0.35,  # Alto pass-through

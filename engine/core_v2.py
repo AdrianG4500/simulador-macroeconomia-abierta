@@ -452,6 +452,7 @@ def eq_fixed_v2(
     delta_E_expected: float = 0.0,
     j_curve_active: bool = False,
     rho: float = 0.0,  # FASE 3.1
+    velocity_penalty: float = 1.0,
 ) -> EquilibriumV2:
     """
     Equilibrio IS-LM-BP bajo Tipo de Cambio FIJO (V2.1).
@@ -575,8 +576,10 @@ def eq_fixed_v2(
         r = r_star + delta_E_expected + rho
         Y = k_m * (A_auto + eps_eff_sx * q - sp["b"] * r)
 
+    Y = max(10.0, Y)
+
     # ── 4. M endógena (LM) ───────────────────────────────────────────────────
-    M_real_eq = sp["k"] * Y - sp["h"] * r
+    M_real_eq = (sp["k"] * Y - sp["h"] * r) / velocity_penalty
     M_endo = M_real_eq * P_local
 
     # ── 5. Variables derivadas ────────────────────────────────────────────────
@@ -645,6 +648,7 @@ def eq_flexible_v2(
     max_iter: int = 200,
     tol: float = 1e-6,
     rho: float = 0.0,  # FASE 3.1
+    velocity_penalty: float = 1.0,
 ) -> EquilibriumV2:
     """
     Equilibrio IS-LM-BP bajo Tipo de Cambio FLEXIBLE (V2.1).
@@ -742,7 +746,7 @@ def eq_flexible_v2(
     # Loop de convergencia externo (circular E ↔ P_local)
     for _ in range(max_iter):
         P_local = compute_price_level(E_current, P_star, P_NT, sp["alpha_PT"], tau=tau)
-        M_real  = M / P_local
+        M_real  = (M / P_local) / velocity_penalty
         q       = compute_real_exchange_rate(E_current, P_star, P_local)
 
         # Expectativas cambiarias: variación desde período anterior
@@ -774,8 +778,8 @@ def eq_flexible_v2(
 
             # IS: Y = k_m · (A_auto_base - b·r + eps_eff_sx·q)
             eq_IS = Y_s - k_m * (A_auto_base - sp["b"] * r_s + eps_eff_sx * q_s)
-            # LM: r = (k·Y - M_real) / h
-            eq_LM = r_s - (sp["k"] * Y_s - M_real_s) / sp["h"]
+            # LM: r = (k·Y - M_real / velocity_penalty) / h
+            eq_LM = r_s - (sp["k"] * Y_s - M_real_s / velocity_penalty) / sp["h"]
             # BP: r = r* + ΔEₑ + ρ - NX/f_eff
             eq_BP = r_s - compute_bp_curve(r_star, delta_E_e, NX_s, f_eff, rho=rho)
             return [eq_IS, eq_LM, eq_BP]
@@ -807,7 +811,7 @@ def eq_flexible_v2(
     # Calcular valores finales con E convergido
     P_local_f = compute_price_level(E_current, P_star, P_NT, sp["alpha_PT"], tau=tau)
     q_f       = compute_real_exchange_rate(E_current, P_star, P_local_f)
-    M_real_f  = M / P_local_f
+    M_real_f  = (M / P_local_f) / velocity_penalty
 
     NX, X, M_imp = compute_NX(
         sp["NX0"], sp["epsilon_x"], sp["epsilon_m"],
@@ -868,6 +872,7 @@ def eq_crawling_peg_v2(
     crawl_rate: float,
     j_curve_active: bool = False,
     rho: float = 0.0,  # FASE 3.1
+    velocity_penalty: float = 1.0,
 ) -> EquilibriumV2:
     """
     Equilibrio IS-LM-BP bajo Crawling Peg (deslizamiento cambiario programado).
@@ -911,6 +916,7 @@ def eq_crawling_peg_v2(
         delta_E_expected=delta_E_expected,
         j_curve_active=j_curve_active,
         rho=rho,  # FASE 3.1
+        velocity_penalty=velocity_penalty,
     )
 
     # Sobreescribir E_endo con el valor del crawl (para registro)
@@ -1065,6 +1071,8 @@ def solve_equilibrium_v2(
     j_curve_active: bool = False,
     delta_E_expected: float = 0.0,
     rho: float = 0.0,  # FASE 3.1
+    prev_risk_penalty: float = 0.0,
+    prev_velocity_penalty: float = 1.0,
 ) -> EquilibriumV2:
     """
     Dispatcher: selecciona el solver según el régimen cambiario.
@@ -1084,6 +1092,8 @@ def solve_equilibrium_v2(
                         Bajo flexible: se añade al delta_E endógeno en BP.
                         Bajo crawling peg: ignorado (usa crawl_rate).
     rho               : Prima de riesgo soberano (riesgo país)
+    prev_risk_penalty : Penalización de riesgo del turno previo
+    prev_velocity_penalty : Penalización de velocidad de dinero previa
 
     Returns
     -------
@@ -1092,23 +1102,51 @@ def solve_equilibrium_v2(
     Raises
     ------
     ValueError
-        Si el régimen no es reconocido.
+         Si el régimen no es reconocido.
     """
+    # ── PENALIZACIÓN POR VALORES EXTREMOS (TAREA 6) ─────────────────────────
+    G_total = pi.get("G_c", pi.get("G", 20.0)) + pi.get("I_g", 0.0)
+    M_val = pi.get("M", 40.0)
+    
+    new_risk_penalty = 0.0
+    new_velocity_penalty_shock = 0.0
+    
+    # Sliders de gasto: G total desproporcionado (penalizaciones exponenciales)
+    if G_total > 30.0:
+        new_risk_penalty += 0.02 * (math.exp(0.4 * (G_total - 30.0)) - 1.0)
+    elif G_total < 5.0:
+        new_risk_penalty += 0.03 * (math.exp(0.5 * (5.0 - G_total)) - 1.0)
+        
+    # Oferta monetaria desproporcionada (penalizaciones exponenciales)
+    if M_val > 120.0:
+        new_risk_penalty += 0.01 * (math.exp(0.2 * (M_val - 120.0)) - 1.0)
+        new_velocity_penalty_shock += 0.05 * (math.exp(0.25 * (M_val - 120.0)) - 1.0)
+    elif M_val < 15.0:
+        new_risk_penalty += 0.03 * (math.exp(0.4 * (15.0 - M_val)) - 1.0)
+        new_velocity_penalty_shock += 0.05 * (math.exp(0.4 * (15.0 - M_val)) - 1.0)
+
+    # Inercia intertemporal: 0.6 * previo + 0.4 * nuevo
+    risk_penalty = 0.6 * prev_risk_penalty + 0.4 * new_risk_penalty
+    velocity_penalty = 0.6 * prev_velocity_penalty + 0.4 * (1.0 + new_velocity_penalty_shock)
+        
+    rho = rho + risk_penalty * 100.0  # escala en puntos porcentuales para UIP
+    
     regime = pi.get("regime", "fixed")
 
     if regime == "fixed":
-        return eq_fixed_v2(
+        eq = eq_fixed_v2(
             sp=sp, pi=pi,
             Y_pot=Y_pot, P_NT=P_NT,
             delta_E_expected=delta_E_expected,
             j_curve_active=j_curve_active,
             rho=rho,  # FASE 3.1
+            velocity_penalty=velocity_penalty,
         )
 
     elif regime == "flexible":
         # En crisis de credibilidad: ajustar punto inicial de E y pasar la prima
         E_guess_crisis = E_prev * (1.0 + delta_E_expected) if delta_E_expected > 0 else None
-        return eq_flexible_v2(
+        eq = eq_flexible_v2(
             sp=sp, pi=pi,
             Y_pot=Y_pot, P_NT=P_NT,
             E_prev=E_prev,
@@ -1117,17 +1155,19 @@ def solve_equilibrium_v2(
             j_curve_active=j_curve_active,
             delta_E_external=delta_E_expected,
             rho=rho,  # FASE 3.1
+            velocity_penalty=velocity_penalty,
         )
 
     elif regime == "crawling_peg":
         crawl_rate = pi.get("crawl_rate", 0.02)
-        return eq_crawling_peg_v2(
+        eq = eq_crawling_peg_v2(
             sp=sp, pi=pi,
             Y_pot=Y_pot, P_NT=P_NT,
             E_prev=E_prev,
             crawl_rate=crawl_rate,
             j_curve_active=j_curve_active,
             rho=rho,  # FASE 3.1
+            velocity_penalty=velocity_penalty,
         )
 
     else:
@@ -1135,3 +1175,9 @@ def solve_equilibrium_v2(
             f"Régimen '{regime}' no reconocido. "
             "Opciones: 'fixed', 'flexible', 'crawling_peg'."
         )
+
+    # Guardar penalizaciones en equilibrio para ser persistidas por el StateManager
+    eq_dict = dict(eq)
+    eq_dict["risk_penalty"] = risk_penalty
+    eq_dict["velocity_penalty"] = velocity_penalty
+    return EquilibriumV2(**eq_dict)

@@ -158,21 +158,25 @@ def get_custom_narrative(summary: dict, snap_f: TurnSnapshot, snap_0: TurnSnapsh
     """
     verdict = summary["verdict"]
     delta_score = summary["delta_score"]
+    colapso_trigger = summary.get("colapso_trigger")
     
+    if colapso_trigger:
+        reasons_list = colapso_trigger.split(" | ")
+        reasons_bulleted = "\n".join([f"• {reason}" for reason in reasons_list])
+        return (
+            "🚨 CRAC MACROECONÓMICO Y COLAPSO DE GOBIERNO:\n"
+            f"{reasons_bulleted}\n\n"
+            "La insostenibilidad estructural de sus políticas condujo a un desenlace crítico. "
+            "La administración ha sido removida/intervenida políticamente para evitar mayores perjuicios soberanos."
+        )
+        
     # Calcular ratios
     debt_service_ratio = (snap_f["r"] * snap_f["B"]) / max(snap_f["G"] + snap_f["r"] * snap_f["B"], 1e-6) * 100
     R_ratio = snap_f["R"] / max(snap_0["R"], 1e-6)
     pi_final = snap_f["pi"]
     
     narrative = ""
-    
-    if verdict == "impeached":
-        narrative = (
-            "El país colapsó bajo el peso de desequilibrios macroeconómicos insostenibles. "
-            "Su gestión fue revocada de forma prematura. Las reservas se agotaron o la inflación "
-            "alcanzó niveles hiperinflacionarios, dejando al Banco Central sin herramientas de defensa."
-        )
-    elif verdict == "reelected":
+    if verdict == "reelected":
         if debt_service_ratio >= 30.0:
             narrative = (
                 "¡El pueblo reconoció su esfuerzo y lo ha REELEGIDO con honores! Impulsó el empleo "
@@ -216,12 +220,52 @@ def get_custom_narrative(summary: dict, snap_f: TurnSnapshot, snap_0: TurnSnapsh
     return narrative
 
 
+def sanitize_for_pdf(text: str) -> str:
+    # Reemplazar viñeta redonda • por -
+    text = text.replace("•", "-")
+    # Reemplazar emojis comunes por equivalentes de texto o simplemente eliminarlos
+    replacements = {
+        "🚨": "[CRISIS]",
+        "💥": "[PROTESTAS]",
+        "🔥": "[COLAPSO]",
+        "💸": "[DEFAULT]",
+        "📈": "[INFLACION]",
+        "💀": "[CRITICO]",
+        "🏛️": "[GOBIERNO]",
+        "🐯": "[TIGRE]",
+        "📉": "[RECESION]",
+        "🌟": "[EXITO]",
+        "🏦": "[BANCO]",
+        "💻": "[TECH]"
+    }
+    for emoji, rep in replacements.items():
+        text = text.replace(emoji, rep)
+    
+    # Filtrar cualquier otro carácter no soportado en latin-1
+    safe_chars = []
+    for char in text:
+        if ord(char) <= 255:
+            safe_chars.append(char)
+        else:
+            if char in ("\u201c", "\u201d", "\u2018", "\u2019"):
+                safe_chars.append('"')
+            elif char == "\u2014":
+                safe_chars.append("-")
+            elif char == "\u2022":
+                safe_chars.append("-")
+            else:
+                pass
+    return "".join(safe_chars)
+
+
 def generate_pdf_report(summary: dict, history: list[TurnSnapshot], scenario_name: str, regime: str, difficulty: str) -> bytes:
     """
     Genera un reporte PDF formal de la administración usando FPDF.
     """
     if not FPDF_SUPPORTED:
         return b""
+        
+    scenario_name_safe = sanitize_for_pdf(scenario_name)
         
     pdf = FPDF()
     pdf.add_page()
@@ -245,7 +289,7 @@ def generate_pdf_report(summary: dict, history: list[TurnSnapshot], scenario_nam
     
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(50, 50, 50)
-    pdf.cell(90, 6, f"Escenario de Inicio: {scenario_name}", ln=False)
+    pdf.cell(90, 6, f"Escenario de Inicio: {scenario_name_safe}", ln=False)
     pdf.cell(90, 6, f"Dificultad de Juego: {difficulty.upper()}", ln=True)
     pdf.cell(90, 6, f"Régimen Cambiario Final: {regime.upper()}", ln=False)
     pdf.cell(90, 6, f"Períodos Simulados: {len(history)-1} Semestres", ln=True)
@@ -339,7 +383,7 @@ def generate_pdf_report(summary: dict, history: list[TurnSnapshot], scenario_nam
     pdf.set_font("Helvetica", "I", 10)
     pdf.set_text_color(80, 80, 80)
     narrative_text = get_custom_narrative(summary, snap_f, snap_0)
-    pdf.multi_cell(0, 5, narrative_text)
+    pdf.multi_cell(0, 5, sanitize_for_pdf(narrative_text))
     
     # Firma y cierre
     pdf.ln(25)

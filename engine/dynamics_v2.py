@@ -22,6 +22,7 @@ Este módulo NO importa de ui/, streamlit, ni directamente de config/.
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 
@@ -226,7 +227,8 @@ def update_non_tradable_price(P_NT: float, pi_core: float) -> float:
     -------
     float : Nuevo precio de bienes no-transables
     """
-    return P_NT * (1.0 + pi_core)
+    pi_core_bounded = max(-0.015, pi_core)
+    return P_NT * (1.0 + pi_core_bounded)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -305,7 +307,7 @@ def compute_fiscal_balance(
 
     intereses = sovereign_rate * B_prev
     deficit = gasto + intereses - recaudacion
-    B_max = 3.0 * max(Y, 100.0) # Cap en 300% del PIB
+    B_max = 50.0 * max(Y, 100.0) # Cap en 5000% del PIB
     B_new = max(-100.0, min(B_max, B_prev + deficit))
 
     return FiscalBalanceResult({
@@ -447,7 +449,7 @@ def check_reserve_circuit_breaker(
     return False, regime, E_current
 
 
-def compute_sovereign_risk(B: float, Y_pot: float, R: float) -> tuple[float, str]:
+def compute_sovereign_risk(B: float, Y_pot: float, R: float, G: float = 20.0, M: float = 40.0, prev_risk_penalty: float = 0.0) -> tuple[float, str]:
     """
     Calcula la prima de riesgo soberano (rho) y la calificación crediticia.
 
@@ -466,6 +468,9 @@ def compute_sovereign_risk(B: float, Y_pot: float, R: float) -> tuple[float, str
     B     : Deuda acumulada
     Y_pot : PIB potencial (para normalizar la deuda)
     R     : Reservas internacionales actuales
+    G     : Gasto público total (para evaluar penalizaciones extremas)
+    M     : Oferta monetaria exógena (para evaluar penalizaciones extremas)
+    prev_risk_penalty : Penalización de riesgo del turno previo (default 0.0)
 
     Returns
     -------
@@ -493,5 +498,24 @@ def compute_sovereign_risk(B: float, Y_pot: float, R: float) -> tuple[float, str
     if R < 0.0:
         rho += 0.05
         rating = f"{rating} (Reserva Crítica)"
+
+    # Penalización extrema no-lineal (Tarea 6 - Exponencial)
+    new_risk_penalty = 0.0
+    if G > 30.0:
+        new_risk_penalty += 0.02 * (math.exp(0.4 * (G - 30.0)) - 1.0)
+    elif G < 5.0:
+        new_risk_penalty += 0.03 * (math.exp(0.5 * (5.0 - G)) - 1.0)
+        
+    if M > 120.0:
+        new_risk_penalty += 0.01 * (math.exp(0.2 * (M - 120.0)) - 1.0)
+    elif M < 15.0:
+        new_risk_penalty += 0.03 * (math.exp(0.4 * (15.0 - M)) - 1.0)
+        
+    # Inercia intertemporal: 0.6 * previo + 0.4 * nuevo
+    risk_penalty = 0.6 * prev_risk_penalty + 0.4 * new_risk_penalty
+    rho += risk_penalty
+    
+    if risk_penalty > 0.05:
+        rating = f"{rating} (Pérdida de Confianza)"
 
     return rho, rating

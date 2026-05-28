@@ -76,7 +76,7 @@ def generate_advisor_warnings(state: GameState) -> list[AdvisorWarning]:
         E_prev_prev = E_prev
     delta_E_curr = E_prev - E_prev_prev
     devaluation_rate_curr = delta_E_curr / max(E_prev_prev, 1e-9)
-    pi_core = prev_snap["pi"] - sp["beta_PT"] * devaluation_rate_curr
+    pi_core = max(-0.015, prev_snap["pi"] - sp["beta_PT"] * devaluation_rate_curr)
     P_NT_next = P_NT_curr * (1.0 + pi_core)
 
     # Solver de equilibrio IS-LM-BP

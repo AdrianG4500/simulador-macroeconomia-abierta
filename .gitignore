@@ -23,6 +23,7 @@ reports/
 *.pdf
 *.html
 *.png
+!assets/logo.png
 *.csv
 *.parquet
 

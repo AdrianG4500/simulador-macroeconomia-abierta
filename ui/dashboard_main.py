@@ -56,20 +56,27 @@ def _render_kpi_card_with_history(label: str, val_current: float, target: float,
         
     current_dev = deviations[-1] if deviations else 0.0
     
-    if current_dev >= 0:
-        color = "#10b981"  # Verde esmeralda
-        delta_str = f"▲ +{abs(current_dev):.2f} {unit} vs Meta"
-        if is_lower_better:
-            delta_str = f"▼ -{abs(current_dev):.2f} {unit} vs Meta (Favorable)"
-        else:
-            delta_str = f"▲ +{abs(current_dev):.2f} {unit} vs Meta (Favorable)"
+    current_snap = history_snaps[-1] if history_snaps else {}
+    current_t = current_snap.get("t", 0)
+
+    if current_t == 0:
+        color = "#38bdf8"
+        delta_str = "Diagnóstico Inicial (Meta de Referencia)"
     else:
-        color = "#ef4444"  # Rojo
-        delta_str = f"▼ -{abs(current_dev):.2f} {unit} vs Meta"
-        if is_lower_better:
-            delta_str = f"▲ +{abs(current_dev):.2f} {unit} vs Meta (Desviación)"
+        if current_dev >= 0:
+            color = "#10b981"  # Verde esmeralda
+            delta_str = f"▲ +{abs(current_dev):.2f} {unit} vs Meta"
+            if is_lower_better:
+                delta_str = f"▼ -{abs(current_dev):.2f} {unit} vs Meta (Favorable)"
+            else:
+                delta_str = f"▲ +{abs(current_dev):.2f} {unit} vs Meta (Favorable)"
         else:
-            delta_str = f"▼ -{abs(current_dev):.2f} {unit} vs Meta (Desviación)"
+            color = "#ef4444"  # Rojo
+            delta_str = f"▼ -{abs(current_dev):.2f} {unit} vs Meta"
+            if is_lower_better:
+                delta_str = f"▲ +{abs(current_dev):.2f} {unit} vs Meta (Desviación)"
+            else:
+                delta_str = f"▼ -{abs(current_dev):.2f} {unit} vs Meta (Desviación)"
             
     if unit == "%":
         value_str = f"{val_current:.2f}%"
@@ -185,16 +192,26 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
     # Obtener valores actuales de políticas para pre-población de sliders bloqueados
     history = state.get("history", [{}])
     last_snap = history[-1]
+    
+    gc_current = float(last_snap.get("policy_applied", {}).get("G_c", last_snap.get("G_c", 15.0)))
+    ig_current = float(last_snap.get("policy_applied", {}).get("I_g", last_snap.get("I_g", 5.0)))
+    tc_current = float(last_snap.get("policy_applied", {}).get("t_c", last_snap.get("t_c", 0.20)))
+    tk_current = float(last_snap.get("policy_applied", {}).get("t_k", last_snap.get("t_k", 0.20)))
+    tr_current = float(last_snap.get("policy_applied", {}).get("Tr", last_snap.get("Tr", 0.0)))
+    theta_current = float(last_snap.get("policy_applied", {}).get("theta", last_snap.get("theta", 0.10)))
+    tau_current = float(last_snap.get("policy_applied", {}).get("tau", last_snap.get("tau", 0.0)))
+    kc_current = float(last_snap.get("policy_applied", {}).get("k_c", last_snap.get("k_c", 0.0)))
     m_current = float(last_snap.get("policy_applied", {}).get("M", last_snap.get("M", 40.0)))
     e_current = float(last_snap.get("policy_applied", {}).get("E", last_snap.get("E", 10.0)))
 
     # Acordeones para simular sliders e inputs de políticas
     with st.sidebar.expander("🏛️ Política Fiscal", expanded=False):
         st.markdown("<p style='font-size:0.75rem; margin-bottom:10px;'>Ajuste la asignación de recursos y estructura impositiva:</p>", unsafe_allow_html=True)
-        st.slider("Gasto Corriente ($G_c$)", min_value=0.0, max_value=40.0, value=15.0, step=1.0, key="fiscal_gc_mock")
-        st.slider("Inversión Pública ($I_g$)", min_value=0.0, max_value=30.0, value=5.0, step=1.0, key="fiscal_ig_mock")
-        st.slider("Tasa de Impuesto al Consumo ($t_c$)", min_value=0.0, max_value=0.50, value=0.20, step=0.01, key="fiscal_tc_mock")
-        st.slider("Transferencias Directas ($Tr$)", min_value=0.0, max_value=20.0, value=0.0, step=1.0, key="fiscal_tr_mock")
+        st.slider("Gasto Corriente ($G_c$)", min_value=0.0, max_value=40.0, value=float(gc_current), step=1.0, key="fiscal_gc_mock")
+        st.slider("Inversión Pública ($I_g$)", min_value=0.0, max_value=30.0, value=float(ig_current), step=1.0, key="fiscal_ig_mock")
+        st.slider("Tasa de Impuesto al Consumo ($t_c$)", min_value=0.0, max_value=0.50, value=float(tc_current), step=0.01, key="fiscal_tc_mock")
+        st.slider("Impuesto a las Empresas ($t_k$)", min_value=0.0, max_value=0.50, value=float(tk_current), step=0.01, key="fiscal_tk_mock")
+        st.slider("Transferencias Directas ($Tr$)", min_value=0.0, max_value=20.0, value=float(tr_current), step=1.0, key="fiscal_tr_mock")
         
     with st.sidebar.expander("🏦 Política Monetaria", expanded=False):
         st.markdown("<p style='font-size:0.75rem; margin-bottom:10px;'>Controle el suministro de dinero doméstico y liquidez:</p>", unsafe_allow_html=True)
@@ -203,7 +220,7 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
             st.caption("⚠️ *M es endógena por régimen de Tipo de Cambio Fijo.*")
         else:
             st.slider("Oferta Monetaria Exógena ($M$)", min_value=10.0, max_value=150.0, value=float(m_current), step=5.0, key="monetary_m_mock")
-        st.slider("Encaje Legal Bancario ($\\theta$)", min_value=0.0, max_value=0.30, value=0.10, step=0.01, key="monetary_theta_mock")
+        st.slider("Encaje Legal Bancario ($\\theta$)", min_value=0.0, max_value=0.30, value=float(theta_current), step=0.01, key="monetary_theta_mock")
         
     with st.sidebar.expander("⚖️ Comercio Exterior y Cambios", expanded=False):
         st.markdown("<p style='font-size:0.75rem; margin-bottom:10px;'>Ajuste las barreras y la paridad nominal cambiaria:</p>", unsafe_allow_html=True)
@@ -212,8 +229,8 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
             st.caption("⚠️ *E es endógeno por régimen de Tipo de Cambio Flexible.*")
         else:
             st.slider("Tipo de Cambio Nominal ($E$)", min_value=1.0, max_value=30.0, value=float(e_current), step=0.5, key="trade_e_mock")
-        st.slider("Arancel a las Importaciones ($\\tau$)", min_value=0.0, max_value=0.50, value=0.0, step=0.05, key="trade_tau_mock")
-        st.slider("Controles de Flujos de Capital ($k_c$)", min_value=0.0, max_value=0.90, value=0.0, step=0.1, key="trade_kc_mock")
+        st.slider("Arancel a las Importaciones ($\\tau$)", min_value=0.0, max_value=0.50, value=float(tau_current), step=0.05, key="trade_tau_mock")
+        st.slider("Controles de Flujos de Capital ($k_c$)", min_value=0.0, max_value=0.90, value=float(kc_current), step=0.1, key="trade_kc_mock")
         
     st.sidebar.divider()
     
@@ -224,6 +241,7 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
             "G_c": st.session_state.get("fiscal_gc_mock", 15.0),
             "I_g": st.session_state.get("fiscal_ig_mock", 5.0),
             "t_c": st.session_state.get("fiscal_tc_mock", 0.20),
+            "t_k": st.session_state.get("fiscal_tk_mock", 0.20),
             "Tr":  st.session_state.get("fiscal_tr_mock", 0.0),
             "M":   st.session_state.get("monetary_m_mock", 40.0),
             "theta": st.session_state.get("monetary_theta_mock", 0.10),
@@ -260,17 +278,39 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
     
     # ── TAREA 4: SECTOR CENTRAL (Área de Trabajo Analítica) ─────────────────
     with col_centro:
-        st.markdown("<h1 style='margin-bottom: 2px;'>Terminal de Control Macroeconómico</h1>", unsafe_allow_html=True)
+        import os
+        logo_path = "assets/logo.png"
+        if os.path.exists(logo_path):
+            col_l, col_r = st.columns([1, 5])
+            with col_l:
+                st.image(logo_path, width=60)
+            with col_r:
+                st.markdown("<h1 style='margin-top: 5px; margin-bottom: 2px; font-size: 2.2rem;'>Terminal de Control Macroeconómico</h1>", unsafe_allow_html=True)
+        else:
+            st.markdown("<h1 style='margin-bottom: 2px;'>Terminal de Control Macroeconómico</h1>", unsafe_allow_html=True)
         st.markdown("<p style='font-size: 0.9rem; margin-top: 0; color: #475467;'>Tablero analítico intertemporal de la administración soberana</p>", unsafe_allow_html=True)
         
         # 1. Cabecera Fija (Grid de 6 KPIs - HTML Premium + Evolución de Barras)
-        # Metas fijas para cada KPI
-        pib_target = 100.0
-        pi_t_target = 3.0
-        pi_nt_target = 3.0
-        u_target = 5.0
-        r_target = 50.0
-        score_target = 80.0
+        # Metas específicas de cada escenario cargado en st.session_state (Fase V3.0)
+        scenario_id = st.session_state.get("ob_scenario", "Economia_Saludable")
+        
+        scenario_targets = {
+            "tiger_asia": {"pib": 105.0, "pi_t": 3.0, "pi_nt": 3.0, "u": 3.0, "r": 150.0, "score": 85.0},
+            "trade_deficit": {"pib": 100.0, "pi_t": 3.0, "pi_nt": 3.0, "u": 5.0, "r": 120.0, "score": 80.0},
+            "latam_crisis": {"pib": 81.0, "pi_t": 15.0, "pi_nt": 15.0, "u": 12.0, "r": 15.0, "score": 75.0},
+            "death_spiral": {"pib": 78.0, "pi_t": 70.0, "pi_nt": 70.0, "u": 20.0, "r": 10.0, "score": 70.0},
+            "Bolivia_2024_Stagflation": {"pib": 95.0, "pi_t": 8.0, "pi_nt": 8.0, "u": 7.0, "r": 30.0, "score": 75.0},
+            "Boom_Exportador": {"pib": 105.0, "pi_t": 3.0, "pi_nt": 3.0, "u": 4.0, "r": 80.0, "score": 80.0},
+            "Credit_Crunch": {"pib": 95.0, "pi_t": 4.0, "pi_nt": 4.0, "u": 7.0, "r": 30.0, "score": 75.0}
+        }
+        
+        targets = scenario_targets.get(scenario_id, {"pib": 100.0, "pi_t": 3.0, "pi_nt": 3.0, "u": 5.0, "r": 50.0, "score": 80.0})
+        pib_target = targets["pib"]
+        pi_t_target = targets["pi_t"]
+        pi_nt_target = targets["pi_nt"]
+        u_target = targets["u"]
+        r_target = targets["r"]
+        score_target = targets["score"]
 
         pib_html, pib_fig, _ = _render_kpi_card_with_history("PIB Real (Y)", pib_val, pib_target, "MM", history, "Y")
         pi_t_html, pi_t_fig, _ = _render_kpi_card_with_history("Inflación Transable (π_T)", pi_t_val, pi_t_target, "%", history, "pi", is_lower_better=True)
@@ -283,26 +323,26 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
         row1 = st.columns(3)
         with row1[0]:
             st.markdown(pib_html, unsafe_allow_html=True)
-            st.plotly_chart(pib_fig, use_container_width=True, theme=None)
+            st.plotly_chart(pib_fig, use_container_width=True, theme=None, key="kpi_pib")
         with row1[1]:
             st.markdown(pi_t_html, unsafe_allow_html=True)
-            st.plotly_chart(pi_t_fig, use_container_width=True, theme=None)
+            st.plotly_chart(pi_t_fig, use_container_width=True, theme=None, key="kpi_pi_t")
         with row1[2]:
             st.markdown(pi_nt_html, unsafe_allow_html=True)
-            st.plotly_chart(pi_nt_fig, use_container_width=True, theme=None)
+            st.plotly_chart(pi_nt_fig, use_container_width=True, theme=None, key="kpi_pi_nt")
 
         st.write("")
 
         row2 = st.columns(3)
         with row2[0]:
             st.markdown(u_html, unsafe_allow_html=True)
-            st.plotly_chart(u_fig, use_container_width=True, theme=None)
+            st.plotly_chart(u_fig, use_container_width=True, theme=None, key="kpi_u")
         with row2[1]:
             st.markdown(r_html, unsafe_allow_html=True)
-            st.plotly_chart(r_fig, use_container_width=True, theme=None)
+            st.plotly_chart(r_fig, use_container_width=True, theme=None, key="kpi_r")
         with row2[2]:
             st.markdown(score_html, unsafe_allow_html=True)
-            st.plotly_chart(score_fig, use_container_width=True, theme=None)
+            st.plotly_chart(score_fig, use_container_width=True, theme=None, key="kpi_score")
         
         # 2. Sistema de Pestañas (Tabs)
         tab1, tab2, tab3, tab4 = st.tabs([
@@ -317,46 +357,46 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
             col_t1a, col_t1b = st.columns(2)
             with col_t1a:
                 fig_gdp = plot_gdp_decomposition(history)
-                st.plotly_chart(fig_gdp, use_container_width=True, theme=None)
+                st.plotly_chart(fig_gdp, use_container_width=True, theme=None, key="chart_gdp")
             with col_t1b:
                 fig_sectoral = plot_sectoral_composition(history)
-                st.plotly_chart(fig_sectoral, use_container_width=True, theme=None)
+                st.plotly_chart(fig_sectoral, use_container_width=True, theme=None, key="chart_sectoral")
             fig_fiscal = plot_fiscal_odometer(last_snap)
-            st.plotly_chart(fig_fiscal, use_container_width=True, theme=None)
+            st.plotly_chart(fig_fiscal, use_container_width=True, theme=None, key="chart_fiscal")
 
         with tab2:
             st.markdown("### 💱 Relaciones Comerciales y Tipo de Cambio")
             fig_butterfly = plot_butterfly_trade(history)
-            st.plotly_chart(fig_butterfly, use_container_width=True, theme=None)
+            st.plotly_chart(fig_butterfly, use_container_width=True, theme=None, key="chart_butterfly")
             col_t2a, col_t2b = st.columns(2)
             with col_t2a:
                 fig_intervention = plot_exchange_intervention(history)
-                st.plotly_chart(fig_intervention, use_container_width=True, theme=None)
+                st.plotly_chart(fig_intervention, use_container_width=True, theme=None, key="chart_intervention")
             with col_t2b:
                 fig_salter = plot_salter_swan(last_snap, mgr.state["structural"])
-                st.plotly_chart(fig_salter, use_container_width=True, theme=None)
+                st.plotly_chart(fig_salter, use_container_width=True, theme=None, key="chart_salter")
 
         with tab3:
             st.markdown("### 📈 Mercados Financieros y Deuda Soberana")
             fig_islm = plot_islm_bp_dynamic(last_snap, mgr.state["structural"])
-            st.plotly_chart(fig_islm, use_container_width=True, theme=None)
+            st.plotly_chart(fig_islm, use_container_width=True, theme=None, key="chart_islm")
             col_t3a, col_t3b = st.columns(2)
             with col_t3a:
                 fig_trilemma = plot_trilemma_ternary(last_snap)
-                st.plotly_chart(fig_trilemma, use_container_width=True, theme=None)
+                st.plotly_chart(fig_trilemma, use_container_width=True, theme=None, key="chart_trilemma")
             with col_t3b:
                 fig_deuda = plot_debt_snowball(history, last_snap)
-                st.plotly_chart(fig_deuda, use_container_width=True, theme=None)
+                st.plotly_chart(fig_deuda, use_container_width=True, theme=None, key="chart_deuda")
 
         with tab4:
             st.markdown("### 📚 Libro de Gestión Histórica y Decisiones")
             col_t4a, col_t4b = st.columns(2)
             with col_t4a:
                 fig_clock = plot_business_cycle_clock(history)
-                st.plotly_chart(fig_clock, use_container_width=True, theme=None)
+                st.plotly_chart(fig_clock, use_container_width=True, theme=None, key="chart_clock")
             with col_t4b:
                 fig_radar = plot_reelection_radar(history)
-                st.plotly_chart(fig_radar, use_container_width=True, theme=None)
+                st.plotly_chart(fig_radar, use_container_width=True, theme=None, key="chart_radar")
 
             # Libro Mayor de Decisiones en tiempo real
             st.markdown("#### 📚 Libro Mayor de Políticas Aplicadas")
@@ -434,13 +474,17 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
                     """, unsafe_allow_html=True)
             else:
                 # Sala de Crisis con alertas mock Premium de transmisión
-                st.markdown("""
+                show_riesgo = (state.get("regime", "fixed") == "fixed") and (state.get("R", 0.0) < 0.25 * state.get("Y_pot", 100.0))
+                riesgo_cambiario_html = """
                 <!-- Alerta 1: Crisis Cambiaria -->
                 <div class="alert-card-critical">
                     <div style="font-weight: 700; font-size: 0.8rem; text-transform: uppercase;">🚨 Riesgo Cambiario Elevado</div>
                     <div style="font-size: 0.75rem; margin-top: 4px; line-height: 1.3;">Las reservas internacionales netas se encuentran en niveles críticos. Se proyecta que el banco central deba abandonar el tipo de cambio fijo o inyectar divisas vendiendo dólares.</div>
                 </div>
-                
+                """ if show_riesgo else ""
+
+                st.markdown(f"""
+                {riesgo_cambiario_html}
                 <!-- Alerta 2: Crowding Out -->
                 <div class="alert-card">
                     <div style="font-weight: 700; font-size: 0.8rem; text-transform: uppercase;">⚠️ Alerta de Crowding Out</div>

@@ -250,7 +250,7 @@ def test_game_over_hyperinflation():
     la inflacion debe superar el 150% y disparar el Game Over.
     """
     mgr = SimStateManagerV2()
-    mgr.calibrate("Economia_Saludable", custom_params={"c0": 30.0, "I0": 30.0, "I_g": 0.0})
+    mgr.calibrate("Economia_Saludable", custom_params={"c0": 40.0, "I0": 30.0, "I_g": 0.0})
 
     # Configurar parametros para garantizar hiperinflacion
     mgr.state["structural"]["alpha_inf"] = 3.0    # Curva de Phillips muy empinada

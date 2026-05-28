@@ -65,8 +65,8 @@ EXOGENOUS_EVENTS_DEFS = {
     "global_recession": {
         "headline": "📉 RECESIÓN GLOBAL EN PUERTA: SE RETRAE LA DEMANDA",
         "narrative": "Una desaceleración económica en las grandes potencias mundiales reduce la demanda externa. Las ventas al extranjero sufren una fuerte contracción y la elasticidad cae.",
-        "impact_text": "Las exportaciones netas autónomas caen en 15 y la elasticidad-precio de exportaciones cae un 20%.",
-        "param_deltas": {"NX0": -15.0, "epsilon_x": 0.80},  # NX0 -= 15, epsilon_x *= 0.80
+        "impact_text": "Las exportaciones netas autónomas caen en 15, la elasticidad-precio de exportaciones cae un 20% y la demanda externa mundial (Y*) se reduce en 5.0.",
+        "param_deltas": {"NX0": -15.0, "epsilon_x": 0.80, "Y_star": -5.0},
         "prob": 0.08,
     },
     "tech_productivity": {
@@ -281,6 +281,9 @@ def apply_event_deltas(state: GameState, event: GameEvent) -> None:
         elif key == "epsilon_x":
             # Multiplicativo (global_recession: epsilon_x *= 0.80)
             sp["epsilon_x"] = round(max(0.1, sp["epsilon_x"] * val), 4)
+        elif key == "Y_star":
+            # Aditivo (global_recession: Y_star -= 5.0)
+            sp["Y_star"] = round(max(0.0, sp["Y_star"] + val), 4)
         elif key == "g_pot":
             # Aditivo
             sp["g_pot"] = round(sp["g_pot"] + val, 4)

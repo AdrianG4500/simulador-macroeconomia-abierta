@@ -101,6 +101,7 @@ def test_circuit_breaker_fires():
     # Configurar crisis: reservas minimas y balanza comercial muy deficitaria
     mgr.state["R"] = 1.0
     mgr.state["structural"]["NX0"] = -60.0   # Enorme deficit comercial
+    mgr.state["structural"]["f"] = 1e-4      # Baja movilidad para simular sudden stop
 
     mgr.start_simulation("fixed")
 

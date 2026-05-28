@@ -780,12 +780,23 @@ def eq_flexible_v2(
             eq_BP = r_s - compute_bp_curve(r_star, delta_E_e, NX_s, f_eff, rho=rho)
             return [eq_IS, eq_LM, eq_BP]
 
+        from scipy.optimize import least_squares
+        lower_bounds = [10.0, 0.1, 0.1]
+        upper_bounds = [300.0, 100.0, 100.0]
         try:
-            sol = fsolve(system, [Y0, r0, E0], full_output=True)
-            Y_new, r_new, E_new = float(sol[0][0]), float(sol[0][1]), float(sol[0][2])
-            E_new = max(1e-4, E_new)
+            sol = least_squares(
+                system, 
+                x0=[Y0, r0, E0], 
+                bounds=(lower_bounds, upper_bounds), 
+                ftol=1e-7, xtol=1e-7
+            )
+            Y_new, r_new, E_new = float(sol.x[0]), float(sol.x[1]), float(sol.x[2])
         except Exception:
-            Y_new, r_new, E_new = Y0, r0, E0
+            # Fallback a fsolve si falla
+            sol_f = fsolve(system, [Y0, r0, E0])
+            Y_new = max(10.0, min(300.0, float(sol_f[0])))
+            r_new = max(0.1, min(100.0, float(sol_f[1])))
+            E_new = max(1e-4, min(100.0, float(sol_f[2])))
 
         # Criterio de convergencia en E
         if abs(E_new - E_current) < tol:
@@ -948,6 +959,7 @@ def compute_salter_swan(
     G: float,
     A_ref: float = 100.0,
     q_ref: float = 1.0,
+    pi: Optional[PolicyInstruments] = None,
 ) -> SalterSwanResult:
     """
     Análisis Salter-Swan dinámico con pendientes derivadas del modelo.
@@ -977,6 +989,7 @@ def compute_salter_swan(
     G         : Gasto público del período
     A_ref     : Absorción de referencia para el equilibrio de largo plazo
     q_ref     : TCR de referencia (= 1.0 implica paridad)
+    pi        : Instrumentos de política
 
     Returns
     -------
@@ -988,14 +1001,20 @@ def compute_salter_swan(
     # Condición Marshall-Lerner
     ml_satisfied = (sp["epsilon_x"] + sp["epsilon_m"]) > 1.0
 
-    # Pendientes derivadas del modelo
-    # Usamos un delta_q pequeño para normalizar las pendientes en el espacio (A, q)
-    # Las pendientes son proporcionales a la respuesta de la economía
-    slope_numerator_IB = 1.0 - sp["c1"] * (1.0 - sp["t"]) + sp["m1"]  # = 1/k_m
-    slope_denominator  = max(sp["epsilon_x"], 1e-6)
+    if pi is None:
+        pi = {}
 
-    slope_IB = -slope_numerator_IB / slope_denominator   # negativa
-    slope_EB = sp["m1"] / slope_denominator               # positiva
+    t_c = pi.get("t_c", sp.get("t", 0.20))
+    tau = pi.get("tau", 0.0)
+    m1_eff = sp.get("m1", 0.15) * (1.0 - tau)
+
+    slope_numerator_IB = 1.0 - sp.get("c1", 0.75) * (1.0 - t_c) + m1_eff
+    slope_denominator  = max(sp.get("epsilon_x", 0.8), 1e-6)
+
+    # Normalización de escala
+    scale_factor = q_ref / max(A_ref, 1.0)
+    slope_IB = (-slope_numerator_IB / slope_denominator) * scale_factor
+    slope_EB = (m1_eff / slope_denominator) * scale_factor
 
     # Curvas IB y EB en el nivel de A actual
     # Las curvas pasan por el punto (A_ref, q_ref) de equilibrio de largo plazo

@@ -1018,17 +1018,17 @@ def plot_trilemma_ternary(current_state: dict) -> go.Figure:
             sum=1,
             aaxis=dict(
                 title="🔒 TC Fijo",
-                min=0.01, linewidth=2, ticks="outside",
+                min=0.0, linewidth=2, ticks="outside",
                 tickformat=".0%"
             ),
             baxis=dict(
                 title="🏦 Indep. Monetaria",
-                min=0.01, linewidth=2, ticks="outside",
+                min=0.0, linewidth=2, ticks="outside",
                 tickformat=".0%"
             ),
             caxis=dict(
                 title="🌐 Movilidad Capitales",
-                min=0.01, linewidth=2, ticks="outside",
+                min=0.0, linewidth=2, ticks="outside",
                 tickformat=".0%"
             ),
         ),

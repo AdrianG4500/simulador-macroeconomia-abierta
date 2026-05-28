@@ -24,8 +24,101 @@ from ui.charts_v2 import (
     plot_trilemma_ternary,
     plot_debt_snowball,
     plot_business_cycle_clock,
-    plot_reelection_radar
+    plot_reelection_radar,
+    STRATEGY_COLORS
 )
+
+import plotly.graph_objects as go
+
+def _render_kpi_card_with_history(label: str, val_current: float, target: float, unit: str, history_snaps: list, value_key: str, is_lower_better: bool = False, is_pi_nt: bool = False) -> tuple[str, go.Figure, str]:
+    import math
+    history_values = []
+    semestres = []
+    
+    for snap in history_snaps[-5:]:
+        t = snap.get("t", 0)
+        semestres.append(f"t={t}")
+        if is_pi_nt:
+            val = snap.get("pi_e", 0.03) * 100.0 - 0.2
+        else:
+            val = snap.get(value_key, 0.0)
+            if value_key in ["pi", "U"]:
+                val *= 100.0
+        history_values.append(val)
+        
+    deviations = []
+    for val in history_values:
+        if is_lower_better:
+            dev = target - val
+        else:
+            dev = val - target
+        deviations.append(dev)
+        
+    current_dev = deviations[-1] if deviations else 0.0
+    
+    if current_dev >= 0:
+        color = "#10b981"  # Verde esmeralda
+        delta_str = f"▲ +{abs(current_dev):.2f} {unit} vs Meta"
+        if is_lower_better:
+            delta_str = f"▼ -{abs(current_dev):.2f} {unit} vs Meta (Favorable)"
+        else:
+            delta_str = f"▲ +{abs(current_dev):.2f} {unit} vs Meta (Favorable)"
+    else:
+        color = "#ef4444"  # Rojo
+        delta_str = f"▼ -{abs(current_dev):.2f} {unit} vs Meta"
+        if is_lower_better:
+            delta_str = f"▲ +{abs(current_dev):.2f} {unit} vs Meta (Desviación)"
+        else:
+            delta_str = f"▼ -{abs(current_dev):.2f} {unit} vs Meta (Desviación)"
+            
+    if unit == "%":
+        value_str = f"{val_current:.2f}%"
+    elif unit == "PTS":
+        value_str = f"{int(val_current)}"
+    else:
+        value_str = f"{val_current:.2f} {unit}"
+        
+    html_card = f"""
+    <div style="background-color: #0f172a; border-left: 5px solid {color}; padding: 12px; border-radius: 4px; margin-bottom: 5px; min-height: 110px; border-top: 1px solid #1e293b; border-right: 1px solid #1e293b; border-bottom: 1px solid #1e293b; box-shadow: 0 4px 10px rgba(0,0,0,0.3);">
+      <div style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: #94a3b8; letter-spacing: 0.5px;">{label}</div>
+      <div style="font-size: 1.8rem; font-weight: 800; color: {color}; margin-top: 4px; line-height: 1.1; font-family: 'JetBrains Mono', monospace;">{value_str}</div>
+      <div style="font-size: 0.75rem; color: {color}; font-weight: 700; margin-top: 6px;">{delta_str}</div>
+    </div>
+    """
+    
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=semestres,
+        y=deviations,
+        marker_color=color,
+        width=0.25,
+        hovertemplate="Semestre %{x}: %{y:+.2f}<extra></extra>"
+    ))
+    
+    fig.update_layout(
+        xaxis=dict(
+            type='category',
+            showgrid=False,
+            showline=True,
+            linecolor='#334155',
+            tickfont=dict(size=8, color="#94a3b8")
+        ),
+        yaxis=dict(
+            zeroline=True,
+            zerolinewidth=1.5,
+            zerolinecolor='#64748b',
+            showgrid=True,
+            gridcolor='#1e293b',
+            tickfont=dict(size=8, color="#94a3b8")
+        ),
+        margin=dict(l=5, r=5, t=5, b=5),
+        height=95,
+        showlegend=False,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)"
+    )
+    
+    return html_card, fig, color
 
 
 def render_game_dashboard(mgr: SimStateManagerV2) -> None:
@@ -62,7 +155,8 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
     
     # Metadatos breves de administración actual
     t_val = mgr.t
-    regime_ui = state.get("regime", "fixed").upper()
+    active_regime = state.get("regime", "fixed")
+    regime_ui = active_regime.upper()
     diff_ui = state.get("difficulty", "easy").upper()
     
     st.sidebar.markdown(f"""
@@ -74,6 +168,26 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
     </div>
     """, unsafe_allow_html=True)
     
+    # ── MEDIDA EXTREMA: Cambio de régimen de emergencia en caliente
+    st.sidebar.markdown("<p style='font-size: 0.8rem; font-weight: 700; margin-top: 5px; color: #ef4444; text-transform: uppercase; letter-spacing: 0.5px;'>🚨 Medida Extrema</p>", unsafe_allow_html=True)
+    if active_regime in ["fixed", "crawling_peg", "dirty_float"]:
+        btn_text = "🔓 Liberar Tipo de Cambio"
+        target_regime = "flexible"
+    else:
+        btn_text = "🔒 Anclar Tipo de Cambio"
+        target_regime = "fixed"
+        
+    if st.sidebar.button(btn_text, use_container_width=True, type="secondary", help="¡ATENCIÓN! Cambiar el régimen cambiario de emergencia penalizará su credibilidad (Score Presidencial -20 pts) y recalculará la economía actual de inmediato."):
+        mgr.emergency_regime_switch(target_regime)
+        st.toast("🚨 ¡CAMBIO DE RÉGIMEN APLICADO! Se recalculó la economía y se penalizó el Score Presidencial.", icon="⚠️")
+        st.rerun()
+        
+    # Obtener valores actuales de políticas para pre-población de sliders bloqueados
+    history = state.get("history", [{}])
+    last_snap = history[-1]
+    m_current = float(last_snap.get("policy_applied", {}).get("M", last_snap.get("M", 40.0)))
+    e_current = float(last_snap.get("policy_applied", {}).get("E", last_snap.get("E", 10.0)))
+
     # Acordeones para simular sliders e inputs de políticas
     with st.sidebar.expander("🏛️ Política Fiscal", expanded=False):
         st.markdown("<p style='font-size:0.75rem; margin-bottom:10px;'>Ajuste la asignación de recursos y estructura impositiva:</p>", unsafe_allow_html=True)
@@ -84,12 +198,20 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
         
     with st.sidebar.expander("🏦 Política Monetaria", expanded=False):
         st.markdown("<p style='font-size:0.75rem; margin-bottom:10px;'>Controle el suministro de dinero doméstico y liquidez:</p>", unsafe_allow_html=True)
-        st.slider("Oferta Monetaria Exógena ($M$)", min_value=10.0, max_value=150.0, value=40.0, step=5.0, key="monetary_m_mock")
+        if active_regime in ["fixed", "crawling_peg"]:
+            st.slider("Oferta Monetaria Exógena ($M$)", min_value=10.0, max_value=150.0, value=float(m_current), step=5.0, key="monetary_m_mock", disabled=True, help="Endógena por Tipo de Cambio Fijo")
+            st.caption("⚠️ *M es endógena por régimen de Tipo de Cambio Fijo.*")
+        else:
+            st.slider("Oferta Monetaria Exógena ($M$)", min_value=10.0, max_value=150.0, value=float(m_current), step=5.0, key="monetary_m_mock")
         st.slider("Encaje Legal Bancario ($\\theta$)", min_value=0.0, max_value=0.30, value=0.10, step=0.01, key="monetary_theta_mock")
         
     with st.sidebar.expander("⚖️ Comercio Exterior y Cambios", expanded=False):
         st.markdown("<p style='font-size:0.75rem; margin-bottom:10px;'>Ajuste las barreras y la paridad nominal cambiaria:</p>", unsafe_allow_html=True)
-        st.slider("Tipo de Cambio Nominal ($E$)", min_value=1.0, max_value=30.0, value=10.0, step=0.5, key="trade_e_mock")
+        if active_regime == "flexible":
+            st.slider("Tipo de Cambio Nominal ($E$)", min_value=1.0, max_value=30.0, value=float(e_current), step=0.5, key="trade_e_mock", disabled=True, help="Flotante y Endógeno por Régimen Flexible")
+            st.caption("⚠️ *E es endógeno por régimen de Tipo de Cambio Flexible.*")
+        else:
+            st.slider("Tipo de Cambio Nominal ($E$)", min_value=1.0, max_value=30.0, value=float(e_current), step=0.5, key="trade_e_mock")
         st.slider("Arancel a las Importaciones ($\\tau$)", min_value=0.0, max_value=0.50, value=0.0, step=0.05, key="trade_tau_mock")
         st.slider("Controles de Flujos de Capital ($k_c$)", min_value=0.0, max_value=0.90, value=0.0, step=0.1, key="trade_kc_mock")
         
@@ -141,41 +263,46 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
         st.markdown("<h1 style='margin-bottom: 2px;'>Terminal de Control Macroeconómico</h1>", unsafe_allow_html=True)
         st.markdown("<p style='font-size: 0.9rem; margin-top: 0; color: #475467;'>Tablero analítico intertemporal de la administración soberana</p>", unsafe_allow_html=True)
         
-        # 1. Cabecera Fija (Grid de 6 KPIs Premium)
-        st.markdown(f"""
-        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px;">
-            <div class="macro-card">
-                <div style="font-size: 0.75rem; text-transform: uppercase; font-weight: 600;">PIB de Equilibrio (Y)</div>
-                <div class="kpi-number kpi-pib">{pib_val:.2f}</div>
-                <div style="font-size: 0.7rem; color: #10B981; font-weight: 700; margin-top: 4px;">&#9650; Sostenible</div>
-            </div>
-            <div class="macro-card">
-                <div style="font-size: 0.75rem; text-transform: uppercase; font-weight: 600;">Inflaci&#243;n Transable (&#960;_T)</div>
-                <div class="kpi-number kpi-inflation">{pi_t_val:.2f}%</div>
-                <div style="font-size: 0.7rem; color: #F79009; font-weight: 700; margin-top: 4px;">&#9679; Pass-through activo</div>
-            </div>
-            <div class="macro-card">
-                <div style="font-size: 0.75rem; text-transform: uppercase; font-weight: 600;">Inflaci&#243;n No-Transable (&#960;_NT)</div>
-                <div class="kpi-number kpi-inflation">{pi_nt_val:.2f}%</div>
-                <div style="font-size: 0.7rem; color: #10B981; font-weight: 700; margin-top: 4px;">&#9660; Estable</div>
-            </div>
-            <div class="macro-card">
-                <div style="font-size: 0.75rem; text-transform: uppercase; font-weight: 600;">Desempleo S-O (U)</div>
-                <div class="kpi-number kpi-default">{u_val:.2f}%</div>
-                <div style="font-size: 0.7rem; color: #10B981; font-weight: 700; margin-top: 4px;">&#9679; Pleno empleo (Ley Okun)</div>
-            </div>
-            <div class="macro-card">
-                <div style="font-size: 0.75rem; text-transform: uppercase; font-weight: 600;">Reservas L&#237;quidas (R)</div>
-                <div class="kpi-number kpi-pib">{r_val:.2f} MM</div>
-                <div style="font-size: 0.7rem; color: #10B981; font-weight: 700; margin-top: 4px;">&#9650; Respaldado</div>
-            </div>
-            <div class="macro-card" style="background: linear-gradient(135deg, rgba(56, 189, 248, 0.05) 0%, rgba(16, 112, 239, 0.05) 100%) !important; border-color: #38BDF8 !important;">
-                <div style="font-size: 0.75rem; text-transform: uppercase; font-weight: 600; color: #38BDF8;">Score Presidencial</div>
-                <div class="kpi-number" style="color: #38BDF8 !important;">{score_val} / 100</div>
-                <div style="font-size: 0.7rem; color: #38BDF8; font-weight: 700; margin-top: 4px;">&#9733; Reelecci&#243;n viable</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        # 1. Cabecera Fija (Grid de 6 KPIs - HTML Premium + Evolución de Barras)
+        # Metas fijas para cada KPI
+        pib_target = 100.0
+        pi_t_target = 3.0
+        pi_nt_target = 3.0
+        u_target = 5.0
+        r_target = 50.0
+        score_target = 80.0
+
+        pib_html, pib_fig, _ = _render_kpi_card_with_history("PIB Real (Y)", pib_val, pib_target, "MM", history, "Y")
+        pi_t_html, pi_t_fig, _ = _render_kpi_card_with_history("Inflación Transable (π_T)", pi_t_val, pi_t_target, "%", history, "pi", is_lower_better=True)
+        pi_nt_html, pi_nt_fig, _ = _render_kpi_card_with_history("Inflación No-Transable (π_NT)", pi_nt_val, pi_nt_target, "%", history, "", is_lower_better=True, is_pi_nt=True)
+        
+        u_html, u_fig, _ = _render_kpi_card_with_history("Desempleo (U)", u_val, u_target, "%", history, "U", is_lower_better=True)
+        r_html, r_fig, _ = _render_kpi_card_with_history("Reservas Netas (R)", r_val, r_target, "MM", history, "R")
+        score_html, score_fig, _ = _render_kpi_card_with_history("Score Presidencial", score_val, score_target, "PTS", history, "score")
+
+        row1 = st.columns(3)
+        with row1[0]:
+            st.markdown(pib_html, unsafe_allow_html=True)
+            st.plotly_chart(pib_fig, use_container_width=True, theme=None)
+        with row1[1]:
+            st.markdown(pi_t_html, unsafe_allow_html=True)
+            st.plotly_chart(pi_t_fig, use_container_width=True, theme=None)
+        with row1[2]:
+            st.markdown(pi_nt_html, unsafe_allow_html=True)
+            st.plotly_chart(pi_nt_fig, use_container_width=True, theme=None)
+
+        st.write("")
+
+        row2 = st.columns(3)
+        with row2[0]:
+            st.markdown(u_html, unsafe_allow_html=True)
+            st.plotly_chart(u_fig, use_container_width=True, theme=None)
+        with row2[1]:
+            st.markdown(r_html, unsafe_allow_html=True)
+            st.plotly_chart(r_fig, use_container_width=True, theme=None)
+        with row2[2]:
+            st.markdown(score_html, unsafe_allow_html=True)
+            st.plotly_chart(score_fig, use_container_width=True, theme=None)
         
         # 2. Sistema de Pestañas (Tabs)
         tab1, tab2, tab3, tab4 = st.tabs([
@@ -266,42 +393,66 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
         """, unsafe_allow_html=True)
         
         # 2. Feed de Noticias / Sala de Crisis
-        st.markdown("<h3 style='font-size:1.1rem; margin-bottom: 8px;'>📰 Periódicos & Crisis</h3>", unsafe_allow_html=True)
-        
-        # Si hay alertas del asesor reales, mostrarlas; sino, mostrar mocks premium definidos
-        advisor_warnings = state.get("advisor_warnings", [])
-        if advisor_warnings:
-            for w in advisor_warnings:
-                adv_name = w.get("advisor", "Gabinete")
-                adv_msg = w.get("message", "")
-                st.markdown(f"""
-                <div class="alert-card-critical">
-                    <div style="font-weight: 700; font-size: 0.8rem; text-transform: uppercase;">⚠️ Alerta del Gabinete</div>
-                    <div style="font-size: 0.75rem; font-weight: 700; color: #DC2626; margin-top: 2px;">{adv_name.upper()}</div>
-                    <div style="font-size: 0.75rem; margin-top: 4px; line-height: 1.3;">{adv_msg}</div>
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            # Sala de Crisis con alertas mock Premium de transmisión
+        if t_val == 0:
+            st.markdown("<h3 style='font-size:1.1rem; margin-bottom: 8px; opacity: 0.65; color: #94a3b8;'>📰 Reporte de Diagnóstico de Inicio</h3>", unsafe_allow_html=True)
+            
+            # Diagnóstico inicial atenuado en t=0
             st.markdown("""
-            <!-- Alerta 1: Crisis Cambiaria -->
-            <div class="alert-card-critical">
-                <div style="font-weight: 700; font-size: 0.8rem; text-transform: uppercase;">🚨 Riesgo Cambiario Elevado</div>
-                <div style="font-size: 0.75rem; margin-top: 4px; line-height: 1.3;">Las reservas internacionales netas se encuentran en niveles críticos. Se proyecta que el banco central deba abandonar el tipo de cambio fijo o inyectar divisas vendiendo dólares.</div>
+            <!-- Diagnóstico 1: Reservas y Régimen -->
+            <div class="alert-card" style="border-left-color: #3b82f6 !important; opacity: 0.8;">
+                <div style="font-weight: 700; font-size: 0.8rem; text-transform: uppercase; color: #3b82f6;">📋 Diagnóstico Cambiario Inicial</div>
+                <div style="font-size: 0.75rem; margin-top: 4px; line-height: 1.3; color: #cbd5e1;">Las reservas internacionales se encuentran en su nivel base de inicio. Se sugiere monitorear la balanza comercial y el tipo de cambio para evitar tensiones de balanza de pagos.</div>
             </div>
             
-            <!-- Alerta 2: Crowding Out -->
-            <div class="alert-card">
-                <div style="font-weight: 700; font-size: 0.8rem; text-transform: uppercase;">⚠️ Alerta de Crowding Out</div>
-                <div style="font-size: 0.75rem; margin-top: 4px; line-height: 1.3;">El elevado gasto público corriente ($G_c$) está presionando al alza la tasa de interés real doméstica, contrayendo marginalmente la inversión productiva privada.</div>
+            <!-- Diagnóstico 2: Situación Fiscal -->
+            <div class="alert-card" style="border-left-color: #3b82f6 !important; opacity: 0.8;">
+                <div style="font-weight: 700; font-size: 0.8rem; text-transform: uppercase; color: #3b82f6;">📋 Diagnóstico Fiscal y de Hacienda</div>
+                <div style="font-size: 0.75rem; margin-top: 4px; line-height: 1.3; color: #cbd5e1;">El presupuesto público inicial parte con una proyección de déficit estable. Se recomienda moderar el gasto corriente para sostener la calificación soberana.</div>
             </div>
             
-            <!-- Alerta 3: Asesor de Hacienda -->
-            <div class="alert-card" style="border-left-color: #38BDF8 !important;">
-                <div style="font-weight: 700; font-size: 0.8rem; text-transform: uppercase; color: #38BDF8;">⚖️ Asesor de Hacienda</div>
-                <div style="font-size: 0.75rem; margin-top: 4px; line-height: 1.3;">El odómetro fiscal proyecta un déficit presupuestario del 4.2% del PIB para el próximo semestre debido al incremento en el pago de intereses de la deuda pública.</div>
+            <!-- Diagnóstico 3: Inflación y Expectativas -->
+            <div class="alert-card" style="border-left-color: #3b82f6 !important; opacity: 0.8;">
+                <div style="font-weight: 700; font-size: 0.8rem; text-transform: uppercase; color: #3b82f6;">📋 Diagnóstico de Estabilidad de Precios</div>
+                <div style="font-size: 0.75rem; margin-top: 4px; line-height: 1.3; color: #cbd5e1;">La inflación y las expectativas adaptativas se encuentran alineadas con los fundamentos iniciales del escenario macroeconómico seleccionado.</div>
             </div>
             """, unsafe_allow_html=True)
+        else:
+            st.markdown("<h3 style='font-size:1.1rem; margin-bottom: 8px;'>📰 Periódicos & Crisis</h3>", unsafe_allow_html=True)
+            
+            # Si hay alertas del asesor reales, mostrarlas; sino, mostrar mocks premium definidos
+            advisor_warnings = state.get("advisor_warnings", [])
+            if advisor_warnings:
+                for w in advisor_warnings:
+                    adv_name = w.get("advisor", "Gabinete")
+                    adv_msg = w.get("message", "")
+                    st.markdown(f"""
+                    <div class="alert-card-critical">
+                        <div style="font-weight: 700; font-size: 0.8rem; text-transform: uppercase;">⚠️ Alerta del Gabinete</div>
+                        <div style="font-size: 0.75rem; font-weight: 700; color: #DC2626; margin-top: 2px;">{adv_name.upper()}</div>
+                        <div style="font-size: 0.75rem; margin-top: 4px; line-height: 1.3;">{adv_msg}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                # Sala de Crisis con alertas mock Premium de transmisión
+                st.markdown("""
+                <!-- Alerta 1: Crisis Cambiaria -->
+                <div class="alert-card-critical">
+                    <div style="font-weight: 700; font-size: 0.8rem; text-transform: uppercase;">🚨 Riesgo Cambiario Elevado</div>
+                    <div style="font-size: 0.75rem; margin-top: 4px; line-height: 1.3;">Las reservas internacionales netas se encuentran en niveles críticos. Se proyecta que el banco central deba abandonar el tipo de cambio fijo o inyectar divisas vendiendo dólares.</div>
+                </div>
+                
+                <!-- Alerta 2: Crowding Out -->
+                <div class="alert-card">
+                    <div style="font-weight: 700; font-size: 0.8rem; text-transform: uppercase;">⚠️ Alerta de Crowding Out</div>
+                    <div style="font-size: 0.75rem; margin-top: 4px; line-height: 1.3;">El elevado gasto público corriente ($G_c$) está presionando al alza la tasa de interés real doméstica, contrayendo marginalmente la inversión productiva privada.</div>
+                </div>
+                
+                <!-- Alerta 3: Asesor de Hacienda -->
+                <div class="alert-card" style="border-left-color: #38BDF8 !important;">
+                    <div style="font-weight: 700; font-size: 0.8rem; text-transform: uppercase; color: #38BDF8;">⚖️ Asesor de Hacienda</div>
+                    <div style="font-size: 0.75rem; margin-top: 4px; line-height: 1.3;">El odómetro fiscal proyecta un déficit presupuestario del 4.2% del PIB para el próximo semestre debido al incremento en el pago de intereses de la deuda pública.</div>
+                </div>
+                """, unsafe_allow_html=True)
             
         st.divider()
         

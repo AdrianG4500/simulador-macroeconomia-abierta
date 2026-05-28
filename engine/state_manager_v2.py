@@ -622,7 +622,11 @@ class SimStateManagerV2:
             r_star=pi.get("r_star"),
             rho=rho,
         )
-        R_new = update_reserves(state["R"], eq["NX"], regime)
+        f_eff = max(sp["f"] * (1.0 - pi.get("k_c", 0.0)), 1e-4)
+        delta_E_e = (E_current - E_prev) / max(E_prev, 1e-9)
+        capital_flows_eq = f_eff * (eq["r"] - pi.get("r_star", 5.0) - delta_E_e - eq.get("rho", 0.0))
+        
+        R_new = update_reserves(state["R"], eq["NX"], regime, capital_flows=capital_flows_eq)
         if regime == "dirty_float" and is_intervention:
             R_new = round(R_new - intervention_amount, 6)
 
@@ -891,6 +895,186 @@ class SimStateManagerV2:
         else:
             # Otras transiciones: neutral
             state["delta_E_expected"] = 0.0
+
+    def emergency_regime_switch(self, new_regime: str) -> None:
+        """
+        Aplica un cambio manual de régimen de emergencia, penalizando el Score
+        Presidencial por shock de credibilidad (-20 pts) y recalculando de inmediato
+        el equilibrio económico del período actual.
+        """
+        if self.state is None or not self.state["history"]:
+            return
+
+        state = self.state
+        snap = state["history"][-1]
+
+        # 1. Cambiar el régimen en el estado y políticas
+        old_regime = state["regime"]
+        state["regime"] = new_regime
+        state["policy"]["regime"] = new_regime
+        snap["policy_applied"]["regime"] = new_regime
+
+        # Sincronizar E y M exógenas al cambiar de régimen para evitar KeyError: 'M'
+        if new_regime == "flexible" and "M" not in state["policy"]:
+            state["policy"]["M"] = float(snap.get("M", 40.0))
+        if new_regime == "fixed" and "E" not in state["policy"]:
+            state["policy"]["E"] = float(snap.get("E", 10.0))
+
+        # 2. Consecuencias de credibilidad
+        if old_regime == "fixed" and new_regime == "flexible":
+            state["delta_E_expected"] = 0.25
+            state["news_feed"].append(NewsItem(
+                t=state["t"],
+                category="crisis",
+                message=(
+                    "⚠️ CRISIS DE CREDIBILIDAD: El gobierno abandona el tipo de cambio fijo por emergencia. "
+                    "El mercado anticipa una devaluación del 25% este período. "
+                    "La tasa de interés subirá para compensar."
+                ),
+                severity="critical",
+            ))
+        else:
+            state["delta_E_expected"] = 0.0
+
+        # 3. Recalcular el equilibrio
+        # Para resolver, necesitamos los valores del turno anterior (de history[-2] si t > 0, o valores base)
+        if len(state["history"]) > 1:
+            prev = state["history"][-2]
+            E_prev = prev["E"]
+            Y_prev = prev["Y"]
+            r_prev = prev["r"]
+            B_prev = prev["B"]
+            R_prev = prev["R"]
+            P_NT_prev = prev.get("P_NT", 1.0)
+            pi_e_prev = prev.get("pi_e", 0.03)
+        else:
+            # En t=0
+            E_prev = snap["E"]
+            Y_prev = snap["Y"]
+            r_prev = snap["r"]
+            B_prev = state.get("B", 60.0)
+            R_prev = state.get("R", 50.0)
+            P_NT_prev = state.get("P_NT", 1.0)
+            pi_e_prev = state.get("pi_e", 0.03)
+
+        # Calcular riesgo soberano
+        rho, rating = compute_sovereign_risk(B_prev, state["Y_pot"], R_prev)
+
+        # Resolver equilibrio estático
+        sp = dict(state["structural"])
+        pi = dict(state["policy"])
+
+        # Sincronizar t_c con t
+        if pi.get("t_c") == 0.20 and sp.get("t") != 0.20:
+            pi["t_c"] = sp["t"]
+        if pi.get("G") != pi.get("G_c", 0.0) + pi.get("I_g", 0.0):
+            pi["G_c"] = pi["G"] - pi.get("I_g", 0.0)
+
+        eq = solve_equilibrium_v2(
+            sp=sp,
+            pi=pi,
+            Y_pot=state["Y_pot"],
+            P_NT=P_NT_prev,
+            E_prev=E_prev,
+            Y_prev=Y_prev,
+            r_prev=r_prev,
+            j_curve_active=state["j_curve_active"],
+            delta_E_expected=state["delta_E_expected"],
+            rho=rho * 100.0,
+        )
+
+        # Actualizar variables del snapshot
+        Y = eq["Y"]
+        r = eq["r"]
+        gap = compute_output_gap(Y, state["Y_pot"])
+
+        # Determinar E y M snap
+        M_endo_raw = eq.get("M_endo", float("nan"))
+        E_endo_raw = eq.get("E_endo", float("nan"))
+
+        if new_regime == "fixed":
+            E_current = pi["E"]
+            M_snap = M_endo_raw if not math.isnan(M_endo_raw) else pi["M"]
+        elif new_regime == "flexible":
+            E_current = E_endo_raw if not math.isnan(E_endo_raw) else E_prev
+            M_snap = pi["M"]
+            pi["E"] = E_current
+        else:
+            E_current = E_prev
+            M_snap = pi["M"]
+
+        delta_E = E_current - E_prev
+        pi_t = compute_inflation(
+            pi_e=pi_e_prev,
+            alpha_inf=sp["alpha_inf"],
+            gap=gap,
+            beta_PT=sp["beta_PT"],
+            delta_E=delta_E,
+            E_prev=max(E_prev, 1e-9),
+            pi_0=sp.get("pi_0", 0.0),
+        )
+
+        U = compute_unemployment(sp["U_n"], sp["gamma_okun"], gap)
+
+        # Finanzas públicas
+        rec, _int, deficit, _B_upd = compute_fiscal_balance(
+            G=pi["G"],
+            t=sp["t"],
+            Y=Y,
+            r=r,
+            B_prev=B_prev,
+            G_c=pi.get("G_c", 15.0),
+            I_g=pi.get("I_g", 5.0),
+            Tr=pi.get("Tr", 0.0),
+            t_c=pi.get("t_c", sp.get("t", 0.20)),
+            t_k=pi.get("t_k", 0.0),
+            tau=pi.get("tau", 0.0),
+            M_imp=eq.get("M_imp", 0.0),
+            r_star=pi.get("r_star", 5.0),
+            rho=rho,
+        )
+
+        deficit_pct = deficit / max(Y, 1e-6)
+        ss = compute_salter_swan(eq, sp, pi["G"])
+
+        # Actualizar en snap
+        snap["Y"] = round(Y, 4)
+        snap["r"] = round(r, 4)
+        snap["E"] = round(E_current, 4)
+        snap["M"] = round(M_snap, 4)
+        snap["NX"] = round(eq["NX"], 4)
+        snap["C"] = round(eq["C"], 4)
+        snap["I_inv"] = round(eq["I_inv"], 4)
+        snap["recaudacion"] = round(rec, 4)
+        snap["deficit"] = round(deficit, 4)
+        snap["pi"] = round(pi_t, 4)
+        snap["U"] = round(U, 4)
+        snap["gap"] = round(gap, 4)
+        snap["q_real"] = round(eq["q_real"], 4)
+        snap["A_domestic"] = round(eq["A_domestic"], 4)
+        snap["P_local"] = round(eq["P_local"], 4)
+        snap["zone_ss"] = ss["zone"]
+        snap["mult"] = round(eq["mult"], 4)
+        snap["rho"] = round(rho, 4)
+        snap["rating"] = rating
+        snap["X"] = round(eq.get("X", 0.0), 4)
+        snap["M_imp"] = round(eq.get("M_imp", 0.0), 4)
+        snap["Y_T"] = round(eq.get("Y_T", 0.0), 4)
+        snap["Y_NT"] = round(eq.get("Y_NT", 0.0), 4)
+
+        # Recalcular score y penalizarlo restando 20 puntos de credibilidad
+        new_score = calc_period_score_v2(
+            gap=gap, U=U, pi=pi_t,
+            deficit_pct=deficit_pct,
+            R=snap["R"], R_0=state["history"][0]["R"],
+        )
+        snap["score"] = max(0, new_score - 20)
+        if state["scores"]:
+            state["scores"][-1] = snap["score"]
+
+        # Sincronizar el estado actual del manager
+        state["P_local"] = eq["P_local"]
+        state["policy"] = pi
 
     # ─────────────────────────────────────────────────────────────────────────
     # RESUMEN FINAL (ENDGAME)

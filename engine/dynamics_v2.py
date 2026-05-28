@@ -305,7 +305,8 @@ def compute_fiscal_balance(
 
     intereses = sovereign_rate * B_prev
     deficit = gasto + intereses - recaudacion
-    B_new = B_prev + deficit
+    B_max = 3.0 * max(Y, 100.0) # Cap en 300% del PIB
+    B_new = max(-100.0, min(B_max, B_prev + deficit))
 
     return FiscalBalanceResult({
         "recaudacion": round(recaudacion, 6),

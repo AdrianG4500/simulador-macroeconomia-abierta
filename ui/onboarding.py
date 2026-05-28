@@ -213,17 +213,11 @@ def render_onboarding_panel(mgr: SimStateManagerV2) -> None:
         </style>
         """, unsafe_allow_html=True)
 
-        st.markdown("<div style='margin-top: 60px;'></div>", unsafe_allow_html=True)
-        import os
-        logo_path = "assets/logo.png"
-        if os.path.exists(logo_path):
-            col1, col2 = st.columns([1, 5])
-            with col1:
-                st.image(logo_path, width=60)
-            with col2:
-                st.markdown("<h1 style='margin-top: 5px; margin-bottom: 0; color: #f59e0b; font-family: Space Grotesk, Inter, sans-serif; font-weight: 800; text-transform: uppercase; letter-spacing: 1.5px; font-size: 2.5rem;'>The Economic War Room</h1>", unsafe_allow_html=True)
-        else:
-            st.markdown("<div class='onboarding-title'>🏛️ The Economic War Room</div>", unsafe_allow_html=True)
+        col_logo, col_titulo = st.columns([1, 6])
+        with col_logo:
+            st.image("assets/logo.png", width=75)
+        with col_titulo:
+            st.title("THE ECONOMIC WAR ROOM")
         st.markdown("<div class='onboarding-subtitle'>\"Bienvenido, Ministro de Economía. El país lo espera. Las decisiones son suyas.\"</div>", unsafe_allow_html=True)
 
         # Inicializar estado de onboarding en st.session_state

@@ -161,106 +161,112 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
     st.sidebar.divider()
     
     # Metadatos breves de administración actual
-    t_val = mgr.t
-    active_regime = state.get("regime", "fixed")
-    regime_ui = active_regime.upper()
-    diff_ui = state.get("difficulty", "easy").upper()
-    
-    st.sidebar.markdown(f"""
-    <div class="macro-card" style="padding: 12px; margin-bottom: 15px; border-left: 4px solid #1570EF;">
-      <div style="font-size: 0.7rem; font-weight: 700; text-transform: uppercase;">Estado de la Gestión</div>
-      <div style="font-size: 1rem; font-weight: 700; margin-top: 4px;">Semestre actual: t = {t_val}/10</div>
-      <div style="font-size: 0.75rem; margin-top: 2px;">Régimen Cambiario: <b>{regime_ui}</b></div>
-      <div style="font-size: 0.75rem;">Dificultad de Partida: <b>{diff_ui}</b></div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # ── MEDIDA EXTREMA: Cambio de régimen de emergencia en caliente
-    st.sidebar.markdown("<p style='font-size: 0.8rem; font-weight: 700; margin-top: 5px; color: #ef4444; text-transform: uppercase; letter-spacing: 0.5px;'>🚨 Medida Extrema</p>", unsafe_allow_html=True)
-    if active_regime in ["fixed", "crawling_peg", "dirty_float"]:
-        btn_text = "🔓 Liberar Tipo de Cambio"
-        target_regime = "flexible"
+    if mgr.state.get("status") not in ["game_over", "completed"] and mgr.t < 10:
+        t_val = mgr.t
+        active_regime = state.get("regime", "fixed")
+        regime_ui = active_regime.upper()
+        diff_ui = state.get("difficulty", "easy").upper()
+        
+        st.sidebar.markdown(f"""
+        <div class="macro-card" style="padding: 12px; margin-bottom: 15px; border-left: 4px solid #1570EF;">
+          <div style="font-size: 0.7rem; font-weight: 700; text-transform: uppercase;">Estado de la Gestión</div>
+          <div style="font-size: 1rem; font-weight: 700; margin-top: 4px;">Semestre actual: t = {t_val}/10</div>
+          <div style="font-size: 0.75rem; margin-top: 2px;">Régimen Cambiario: <b>{regime_ui}</b></div>
+          <div style="font-size: 0.75rem;">Dificultad de Partida: <b>{diff_ui}</b></div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # ── MEDIDA EXTREMA: Cambio de régimen de emergencia en caliente
+        st.sidebar.markdown("<p style='font-size: 0.8rem; font-weight: 700; margin-top: 5px; color: #ef4444; text-transform: uppercase; letter-spacing: 0.5px;'>🚨 Medida Extrema</p>", unsafe_allow_html=True)
+        if active_regime in ["fixed", "crawling_peg", "dirty_float"]:
+            btn_text = "🔓 Liberar Tipo de Cambio"
+            target_regime = "flexible"
+        else:
+            btn_text = "🔒 Anclar Tipo de Cambio"
+            target_regime = "fixed"
+            
+        if st.sidebar.button(btn_text, use_container_width=True, type="secondary", help="¡ATENCIÓN! Cambiar el régimen cambiario de emergencia penalizará su credibilidad (Score Presidencial -20 pts) y recalculará la economía actual de inmediato."):
+            mgr.emergency_regime_switch(target_regime)
+            st.toast("🚨 ¡CAMBIO DE RÉGIMEN APLICADO! Se recalculó la economía y se penalizó el Score Presidencial.", icon="⚠️")
+            st.rerun()
+            
+        # Obtener valores actuales de políticas para pre-población de sliders bloqueados
+        history = state.get("history", [{}])
+        last_snap = history[-1]
+        
+        gc_current = float(last_snap.get("policy_applied", {}).get("G_c", last_snap.get("G_c", 15.0)))
+        ig_current = float(last_snap.get("policy_applied", {}).get("I_g", last_snap.get("I_g", 5.0)))
+        tc_current = float(last_snap.get("policy_applied", {}).get("t_c", last_snap.get("t_c", 0.20)))
+        tk_current = float(last_snap.get("policy_applied", {}).get("t_k", last_snap.get("t_k", 0.20)))
+        tr_current = float(last_snap.get("policy_applied", {}).get("Tr", last_snap.get("Tr", 0.0)))
+        theta_current = float(last_snap.get("policy_applied", {}).get("theta", last_snap.get("theta", 0.10)))
+        tau_current = float(last_snap.get("policy_applied", {}).get("tau", last_snap.get("tau", 0.0)))
+        kc_current = float(last_snap.get("policy_applied", {}).get("k_c", last_snap.get("k_c", 0.0)))
+        m_current = float(last_snap.get("policy_applied", {}).get("M", last_snap.get("M", 40.0)))
+        e_current = float(last_snap.get("policy_applied", {}).get("E", last_snap.get("E", 10.0)))
+
+        # Acordeones para simular sliders e inputs de políticas
+        with st.sidebar.expander("🏛️ Política Fiscal", expanded=False):
+            st.markdown("<p style='font-size:0.75rem; margin-bottom:10px;'>Ajuste la asignación de recursos y estructura impositiva:</p>", unsafe_allow_html=True)
+            st.slider("Gasto Corriente ($G_c$)", min_value=0.0, max_value=40.0, value=float(gc_current), step=1.0, key="fiscal_gc_mock")
+            st.slider("Inversión Pública ($I_g$)", min_value=0.0, max_value=30.0, value=float(ig_current), step=1.0, key="fiscal_ig_mock")
+            st.slider("Tasa de Impuesto al Consumo ($t_c$)", min_value=0.0, max_value=0.50, value=float(tc_current), step=0.01, key="fiscal_tc_mock")
+            st.slider("Impuesto a las Empresas ($t_k$)", min_value=0.0, max_value=0.50, value=float(tk_current), step=0.01, key="fiscal_tk_mock")
+            st.slider("Transferencias Directas ($Tr$)", min_value=0.0, max_value=20.0, value=float(tr_current), step=1.0, key="fiscal_tr_mock")
+            
+        with st.sidebar.expander("🏦 Política Monetaria", expanded=False):
+            st.markdown("<p style='font-size:0.75rem; margin-bottom:10px;'>Controle el suministro de dinero doméstico y liquidez:</p>", unsafe_allow_html=True)
+            if active_regime in ["fixed", "crawling_peg"]:
+                st.slider("Oferta Monetaria Exógena ($M$)", min_value=10.0, max_value=150.0, value=float(m_current), step=5.0, key="monetary_m_mock", disabled=True, help="Endógena por Tipo de Cambio Fijo")
+                st.caption("⚠️ *M es endógena por régimen de Tipo de Cambio Fijo.*")
+            else:
+                st.slider("Oferta Monetaria Exógena ($M$)", min_value=10.0, max_value=150.0, value=float(m_current), step=5.0, key="monetary_m_mock")
+            st.slider("Encaje Legal Bancario ($\\theta$)", min_value=0.0, max_value=0.30, value=float(theta_current), step=0.01, key="monetary_theta_mock")
+            
+        with st.sidebar.expander("⚖️ Comercio Exterior y Cambios", expanded=False):
+            st.markdown("<p style='font-size:0.75rem; margin-bottom:10px;'>Ajuste las barreras y la paridad nominal cambiaria:</p>", unsafe_allow_html=True)
+            if active_regime == "flexible":
+                st.slider("Tipo de Cambio Nominal ($E$)", min_value=1.0, max_value=30.0, value=float(e_current), step=0.5, key="trade_e_mock", disabled=True, help="Flotante y Endógeno por Régimen Flexible")
+                st.caption("⚠️ *E es endógeno por régimen de Tipo de Cambio Flexible.*")
+            else:
+                st.slider("Tipo de Cambio Nominal ($E$)", min_value=1.0, max_value=30.0, value=float(e_current), step=0.5, key="trade_e_mock")
+            st.slider("Arancel a las Importaciones ($\\tau$)", min_value=0.0, max_value=0.50, value=float(tau_current), step=0.05, key="trade_tau_mock")
+            st.slider("Controles de Flujos de Capital ($k_c$)", min_value=0.0, max_value=0.90, value=float(kc_current), step=0.1, key="trade_kc_mock")
+            
+        st.sidebar.divider()
+        
+        # ── EJECUCIÓN DEL TURNO Y REINICIO ──────────────────────────────────────
+        if st.sidebar.button("⏭️ APLICAR POLÍTICAS Y AVANZAR", use_container_width=True, type="primary"):
+            # 1. Capturamos los valores de los sliders desde el session_state
+            policy_changes = {
+                "G_c": st.session_state.get("fiscal_gc_mock", 15.0),
+                "I_g": st.session_state.get("fiscal_ig_mock", 5.0),
+                "t_c": st.session_state.get("fiscal_tc_mock", 0.20),
+                "t_k": st.session_state.get("fiscal_tk_mock", 0.20),
+                "Tr":  st.session_state.get("fiscal_tr_mock", 0.0),
+                "M":   st.session_state.get("monetary_m_mock", 40.0),
+                "theta": st.session_state.get("monetary_theta_mock", 0.10),
+                "E":   st.session_state.get("trade_e_mock", 10.0),
+                "tau": st.session_state.get("trade_tau_mock", 0.0),
+                "k_c": st.session_state.get("trade_kc_mock", 0.0),
+            }
+            
+            # 2. Le pasamos las políticas al motor y avanzamos el semestre
+            mgr.step_forward(policy_changes)
+            
+            # 3. Recargamos la interfaz para ver los resultados
+            st.rerun()
+
+        if st.sidebar.button("🔄 Reiniciar Simulación", use_container_width=True, type="secondary"):
+            # Borramos el motor de la memoria para volver al Turno 0
+            if "mgr" in st.session_state:
+                del st.session_state["mgr"]
+            st.rerun()
     else:
-        btn_text = "🔒 Anclar Tipo de Cambio"
-        target_regime = "fixed"
-        
-    if st.sidebar.button(btn_text, use_container_width=True, type="secondary", help="¡ATENCIÓN! Cambiar el régimen cambiario de emergencia penalizará su credibilidad (Score Presidencial -20 pts) y recalculará la economía actual de inmediato."):
-        mgr.emergency_regime_switch(target_regime)
-        st.toast("🚨 ¡CAMBIO DE RÉGIMEN APLICADO! Se recalculó la economía y se penalizó el Score Presidencial.", icon="⚠️")
-        st.rerun()
-        
-    # Obtener valores actuales de políticas para pre-población de sliders bloqueados
-    history = state.get("history", [{}])
-    last_snap = history[-1]
-    
-    gc_current = float(last_snap.get("policy_applied", {}).get("G_c", last_snap.get("G_c", 15.0)))
-    ig_current = float(last_snap.get("policy_applied", {}).get("I_g", last_snap.get("I_g", 5.0)))
-    tc_current = float(last_snap.get("policy_applied", {}).get("t_c", last_snap.get("t_c", 0.20)))
-    tk_current = float(last_snap.get("policy_applied", {}).get("t_k", last_snap.get("t_k", 0.20)))
-    tr_current = float(last_snap.get("policy_applied", {}).get("Tr", last_snap.get("Tr", 0.0)))
-    theta_current = float(last_snap.get("policy_applied", {}).get("theta", last_snap.get("theta", 0.10)))
-    tau_current = float(last_snap.get("policy_applied", {}).get("tau", last_snap.get("tau", 0.0)))
-    kc_current = float(last_snap.get("policy_applied", {}).get("k_c", last_snap.get("k_c", 0.0)))
-    m_current = float(last_snap.get("policy_applied", {}).get("M", last_snap.get("M", 40.0)))
-    e_current = float(last_snap.get("policy_applied", {}).get("E", last_snap.get("E", 10.0)))
-
-    # Acordeones para simular sliders e inputs de políticas
-    with st.sidebar.expander("🏛️ Política Fiscal", expanded=False):
-        st.markdown("<p style='font-size:0.75rem; margin-bottom:10px;'>Ajuste la asignación de recursos y estructura impositiva:</p>", unsafe_allow_html=True)
-        st.slider("Gasto Corriente ($G_c$)", min_value=0.0, max_value=40.0, value=float(gc_current), step=1.0, key="fiscal_gc_mock")
-        st.slider("Inversión Pública ($I_g$)", min_value=0.0, max_value=30.0, value=float(ig_current), step=1.0, key="fiscal_ig_mock")
-        st.slider("Tasa de Impuesto al Consumo ($t_c$)", min_value=0.0, max_value=0.50, value=float(tc_current), step=0.01, key="fiscal_tc_mock")
-        st.slider("Impuesto a las Empresas ($t_k$)", min_value=0.0, max_value=0.50, value=float(tk_current), step=0.01, key="fiscal_tk_mock")
-        st.slider("Transferencias Directas ($Tr$)", min_value=0.0, max_value=20.0, value=float(tr_current), step=1.0, key="fiscal_tr_mock")
-        
-    with st.sidebar.expander("🏦 Política Monetaria", expanded=False):
-        st.markdown("<p style='font-size:0.75rem; margin-bottom:10px;'>Controle el suministro de dinero doméstico y liquidez:</p>", unsafe_allow_html=True)
-        if active_regime in ["fixed", "crawling_peg"]:
-            st.slider("Oferta Monetaria Exógena ($M$)", min_value=10.0, max_value=150.0, value=float(m_current), step=5.0, key="monetary_m_mock", disabled=True, help="Endógena por Tipo de Cambio Fijo")
-            st.caption("⚠️ *M es endógena por régimen de Tipo de Cambio Fijo.*")
-        else:
-            st.slider("Oferta Monetaria Exógena ($M$)", min_value=10.0, max_value=150.0, value=float(m_current), step=5.0, key="monetary_m_mock")
-        st.slider("Encaje Legal Bancario ($\\theta$)", min_value=0.0, max_value=0.30, value=float(theta_current), step=0.01, key="monetary_theta_mock")
-        
-    with st.sidebar.expander("⚖️ Comercio Exterior y Cambios", expanded=False):
-        st.markdown("<p style='font-size:0.75rem; margin-bottom:10px;'>Ajuste las barreras y la paridad nominal cambiaria:</p>", unsafe_allow_html=True)
-        if active_regime == "flexible":
-            st.slider("Tipo de Cambio Nominal ($E$)", min_value=1.0, max_value=30.0, value=float(e_current), step=0.5, key="trade_e_mock", disabled=True, help="Flotante y Endógeno por Régimen Flexible")
-            st.caption("⚠️ *E es endógeno por régimen de Tipo de Cambio Flexible.*")
-        else:
-            st.slider("Tipo de Cambio Nominal ($E$)", min_value=1.0, max_value=30.0, value=float(e_current), step=0.5, key="trade_e_mock")
-        st.slider("Arancel a las Importaciones ($\\tau$)", min_value=0.0, max_value=0.50, value=float(tau_current), step=0.05, key="trade_tau_mock")
-        st.slider("Controles de Flujos de Capital ($k_c$)", min_value=0.0, max_value=0.90, value=float(kc_current), step=0.1, key="trade_kc_mock")
-        
-    st.sidebar.divider()
-    
-    # ── EJECUCIÓN DEL TURNO Y REINICIO ──────────────────────────────────────
-    if st.sidebar.button("⏭️ APLICAR POLÍTICAS Y AVANZAR", use_container_width=True, type="primary"):
-        # 1. Capturamos los valores de los sliders desde el session_state
-        policy_changes = {
-            "G_c": st.session_state.get("fiscal_gc_mock", 15.0),
-            "I_g": st.session_state.get("fiscal_ig_mock", 5.0),
-            "t_c": st.session_state.get("fiscal_tc_mock", 0.20),
-            "t_k": st.session_state.get("fiscal_tk_mock", 0.20),
-            "Tr":  st.session_state.get("fiscal_tr_mock", 0.0),
-            "M":   st.session_state.get("monetary_m_mock", 40.0),
-            "theta": st.session_state.get("monetary_theta_mock", 0.10),
-            "E":   st.session_state.get("trade_e_mock", 10.0),
-            "tau": st.session_state.get("trade_tau_mock", 0.0),
-            "k_c": st.session_state.get("trade_kc_mock", 0.0),
-        }
-        
-        # 2. Le pasamos las políticas al motor y avanzamos el semestre
-        mgr.step_forward(policy_changes)
-        
-        # 3. Recargamos la interfaz para ver los resultados
-        st.rerun()
-
-    if st.sidebar.button("🔄 Reiniciar Simulación", use_container_width=True, type="secondary"):
-        # Borramos el motor de la memoria para volver al Turno 0
-        if "mgr" in st.session_state:
-            del st.session_state["mgr"]
-        st.rerun()
+        st.sidebar.markdown("### 🏛️ Gestión Concluida")
+        if st.sidebar.button("🔄 Reiniciar Partida", use_container_width=True):
+            st.session_state.clear()
+            st.rerun()
 
     # ── DIVISIÓN GLOBAL EN COLUMNA CENTRAL Y DERECHA ────────────────────────
     col_centro, col_derecha = st.columns([7, 3])
@@ -278,16 +284,22 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
     
     # ── TAREA 4: SECTOR CENTRAL (Área de Trabajo Analítica) ─────────────────
     with col_centro:
+        import base64
         import os
-        logo_path = "assets/logo.png"
-        if os.path.exists(logo_path):
-            col_l, col_r = st.columns([1, 5])
-            with col_l:
-                st.image(logo_path, width=60)
-            with col_r:
-                st.markdown("<h1 style='margin-top: 5px; margin-bottom: 2px; font-size: 2.2rem;'>Terminal de Control Macroeconómico</h1>", unsafe_allow_html=True)
-        else:
-            st.markdown("<h1 style='margin-bottom: 2px;'>Terminal de Control Macroeconómico</h1>", unsafe_allow_html=True)
+        logo_base64 = ""
+        if os.path.exists("assets/logo.png"):
+            with open("assets/logo.png", "rb") as f:
+                logo_base64 = base64.b64encode(f.read()).decode("utf-8")
+        logo_src = f"data:image/png;base64,{logo_base64}" if logo_base64 else "app/static/assets/logo.png"
+        st.markdown(
+            f"""
+            <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 20px;">
+                <img src="{logo_src}" style="height: 50px; width: auto;">
+                <h1 style="margin: 0; font-size: 2.5rem;">Tablero de Mando Soberano</h1>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
         st.markdown("<p style='font-size: 0.9rem; margin-top: 0; color: #475467;'>Tablero analítico intertemporal de la administración soberana</p>", unsafe_allow_html=True)
         
         # 1. Cabecera Fija (Grid de 6 KPIs - HTML Premium + Evolución de Barras)
@@ -459,7 +471,37 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
         else:
             st.markdown("<h3 style='font-size:1.1rem; margin-bottom: 8px;'>📰 Periódicos & Crisis</h3>", unsafe_allow_html=True)
             
-            # Si hay alertas del asesor reales, mostrarlas; sino, mostrar mocks premium definidos
+            # Leer los eventos activos del periodo actual
+            active_events = state.get("active_events", [])
+            if history:
+                active_events = list(set(active_events + history[-1].get("events_triggered", [])))
+                
+            EVENT_METADATA = {
+                "commodity_supercycle": {"title": "📈 BOOM EN COMMODITIES", "color": "#10b981", "desc": "Precios de exportación suben drásticamente. Términos de intercambio mejoran de forma sin precedentes (+20 NX0, +10% P*)."},
+                "fed_rate_shock": {"title": "🏦 ALZA DE TASAS DE LA FED", "color": "#ef4444", "desc": "La Fed endurece su tasa de referencia en +400 pb. Fuerte drenaje de liquidez global y encarecimiento del crédito."},
+                "global_recession": {"title": "📉 RECESIÓN GLOBAL CONTRAE DEMANDA", "color": "#ef4444", "desc": "Gran desaceleración en las potencias mundiales. Caída de exportaciones autónomas y elasticidad de exportación."},
+                "tech_productivity": {"title": "💻 REVOLUCIÓN TECNOLÓGICA", "color": "#10b981", "desc": "Adopción masiva de IA y automatización. Tasa de crecimiento potencial anual aumenta +1% permanentemente."},
+                "natural_disaster": {"title": "🚨 SEVERO DESASTRE NATURAL AZOTA CAPITAL", "color": "#ef4444", "desc": "Daños severos en infraestructura y redes logísticas. Pérdida del 10% del PIB potencial y gasto forzoso de reconstrucción."},
+                "social_unrest": {"title": "💥 DISTURBIOS SOCIALES POR DESEMPLEO", "color": "#ef4444", "desc": "Falta de empleo desata protestas masivas, reduciendo el PIB potencial en 5% y contrayendo la propensión marginal a consumir."},
+                "bank_panic": {"title": "🏦 PÁNICO BANCARIO: CORRIDA CONTRA EL PESO", "color": "#ef4444", "desc": "Bajas reservas desatan rumores de devaluación y corralito. Las expectativas de devaluación suben al 20%."},
+                "stagflation_trap": {"title": "📈 TRAMPA DE ESTANFLACIÓN INERCIAL", "color": "#ef4444", "desc": "Coexistencia de nulo crecimiento con inflación alta consolida inflación inercial base permanentemente en +5%."},
+                "virtuous_circle": {"title": "🌟 CÍRCULO VIRTUOSO MACROECONÓMICO", "color": "#10b981", "desc": "Gran dinamismo y sólido control fiscal despiertan optimismo inversor, reduciendo el efecto crowding-out de las tasas de interés."}
+            }
+
+            # Mostrar eventos reales por encima
+            has_events = False
+            for ev_id in active_events:
+                if ev_id in EVENT_METADATA:
+                    has_events = True
+                    meta = EVENT_METADATA[ev_id]
+                    st.markdown(f"""
+                    <div style="border-left: 5px solid {meta['color']} !important; margin-bottom: 12px; background-color: #0f172a; padding: 12px; border-radius: 4px; border-top: 1px solid #1e293b; border-right: 1px solid #1e293b; border-bottom: 1px solid #1e293b; box-shadow: 0 4px 10px rgba(0,0,0,0.3);">
+                        <div style="font-weight: 700; font-size: 0.8rem; text-transform: uppercase; color: {meta['color']};">{meta['title']}</div>
+                        <div style="font-size: 0.75rem; margin-top: 4px; line-height: 1.3; color: #cbd5e1;">{meta['desc']}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            # Si hay alertas del asesor reales, mostrarlas a continuación
             advisor_warnings = state.get("advisor_warnings", [])
             if advisor_warnings:
                 for w in advisor_warnings:
@@ -472,8 +514,8 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
                         <div style="font-size: 0.75rem; margin-top: 4px; line-height: 1.3;">{adv_msg}</div>
                     </div>
                     """, unsafe_allow_html=True)
-            else:
-                # Sala de Crisis con alertas mock Premium de transmisión
+            elif not has_events:
+                # Sala de Crisis con alertas mock Premium de transmisión si no hay eventos reales
                 show_riesgo = (state.get("regime", "fixed") == "fixed") and (state.get("R", 0.0) < 0.25 * state.get("Y_pot", 100.0))
                 riesgo_cambiario_html = """
                 <!-- Alerta 1: Crisis Cambiaria -->

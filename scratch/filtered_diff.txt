@@ -1,0 +1,504 @@
+@@ -341,22 +451,25 @@ def eq_fixed_v2(
+     P_NT: float,
+     delta_E_expected: float = 0.0,
+     j_curve_active: bool = False,
++    rho: float = 0.0,  # FASE 3.1
+ ) -> EquilibriumV2:
+     """
+-    Equilibrio IS-LM-BP bajo Tipo de Cambio FIJO.
++    Equilibrio IS-LM-BP bajo Tipo de Cambio FIJO (V2.1).
+ 
+     Bajo TC fijo:
+     - E es ex├│geno (instrumento del banco central).
+     - M se acomoda end├│genamente para mantener r = r_BP.
+     - La condici├│n externa determina r.
+ 
++    V2.1 incorpora: G_c+I_g=G_total, Tr, t_c, t_k, rho_k, tau, s_x, k_c.
++
+     Pasos:
+-    1. Calcular P_local con pass-through.
+-    2. Calcular q = E┬╖P*/P_local.
+-    3. Determinar r = r_BP (condici├│n externa).
+-    4. Calcular A (demanda aut├│noma).
+-    5. Resolver IS para Y.
+-    6. Calcular M_endo para satisfacer LM con ese (Y, r).
++    1. Extraer instrumentos V2.1 con retrocompatibilidad.
++    2. Calcular P_local y q.
++    3. Resolver sistema 2├ù2 IS-BP para (Y, r).
++    4. Calcular M_endo (LM).
++    5. Calcular variables derivadas (C, I_inv, X, M_imp, NX, A_dom).
++    6. Verificar identidad macroecon├│mica.
+ 
+     Parameters
+     ----------
+@@ -366,66 +479,91 @@ def eq_fixed_v2(
+     P_NT             : Precio de bienes no-transables (estado)
+     delta_E_expected : Variaci├│n esperada del TC (= 0 bajo TC fijo cre├¡ble)
+     j_curve_active   : Flag de efecto J-curve activo
++    rho              : Prima de riesgo pa├¡s (Fase 3: de la Deuda Soberana)
+ 
+     Returns
+     -------
+     EquilibriumV2
+     """
+-    E       = pi["E"]
+-    G       = pi["G"]
+-    r_star  = pi["r_star"]
+-    P_star  = sp["P_star"]
+-
+-    # 1. Nivel de precios local (pass-through cambiario)
+-    P_local = compute_price_level(E, P_star, P_NT, sp["alpha_PT"])
++    E      = pi["E"]
++    r_star = pi["r_star"]
++    P_star = sp["P_star"]
+ 
+-    # 2. Tipo de cambio real
++    # ΓöÇΓöÇ 1. Extraer instrumentos V2.1 con retrocompatibilidad ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    G_c   = pi.get("G_c",  pi.get("G", 20.0))
++    I_g   = pi.get("I_g",  0.0)
++    Tr    = pi.get("Tr",   0.0)
++    t_c   = pi.get("t_c",  sp.get("t", 0.20))  # retrocompat: usa sp["t"] si no hay t_c
++    t_k   = pi.get("t_k",  0.0)
++    tau   = pi.get("tau",  0.0)
++    s_x   = pi.get("s_x",  0.0)
++    k_c   = pi.get("k_c",  0.0)
++    rho_k = sp.get("rho_k", 0.0)
++
++    G_total = G_c + I_g
++    # Sincronizar G en pi para retrocompatibilidad (snapshots, scoring, etc.)
++    pi = dict(pi)  # copia local
++    pi["G"] = G_total
++
++    # ΓöÇΓöÇ 2. Nivel de precios local y TCR ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    P_local = compute_price_level(E, P_star, P_NT, sp["alpha_PT"], tau=tau)
+     q = compute_real_exchange_rate(E, P_star, P_local)
+ 
+-    # 3. Tasa de inter├⌐s: condici├│n de equilibrio externo
+-    #    Necesitamos NX para r_BP, pero NX depende de Y que a├║n no conocemos.
+-    #    Estrategia: soluci├│n anal├¡tica conjunta IS + BP.
+-    #
+-    #    IS: Y = k_m ┬╖ (A_base + ╬╡_x┬╖q - b┬╖r)   donde A_base = c0+I0+G+NX0
+-    #    BP: r = r* + ╬öEΓéæ - NX/f  y  NX = NX0 + ╬╡_eff┬╖q - m1┬╖Y
+-    #
+-    #    Sustituyendo NX en BP:
+-    #    r = r* + ╬öEΓéæ - (NX0 + ╬╡_eff┬╖q - m1┬╖Y) / f
+-    #    r = r* + ╬öEΓéæ - NX0/f - ╬╡_eff┬╖q/f + m1┬╖Y/f  ... (i)
+-    #
+-    #    De IS: Y = k_m┬╖(c0+I0+G+NX0-b┬╖r + ╬╡_x┬╖q)
+-    #    Sustituyendo (i) en IS y resolviendo para Y, r:
+-
+-    k_m = compute_multiplier(sp["c1"], sp["t"], sp["m1"])
+-    slope = 1.0 - sp["c1"] * (1.0 - sp["t"]) + sp["m1"]  # = 1/k_m
+-
+-    # Componente aut├│nomo sin el efecto de r (lo separaremos)
+-    A_auto = sp["c0"] + sp["I0"] + G + sp["NX0"]
+-
+-    # Elasticidad efectiva de NX a q (seg├║n M-L y J-curve)
+-    ml_ok = (sp["epsilon_x"] + sp["epsilon_m"]) > 1.0
+-    if j_curve_active:
+-        eps_eff = 0.10
+-    elif ml_ok:
+-        eps_eff = sp["epsilon_x"]
++    # ΓöÇΓöÇ Multiplicador con tau y t_c ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    k_m = compute_multiplier(sp["c1"], t_c, sp["m1"], tau)
++    slope = 1.0 - sp["c1"] * (1.0 - t_c) + sp["m1"] * (1.0 - tau)  # = 1/k_m
++
++    # Movilidad de capitales efectiva (controles reducen flujo)
++    f_eff = max(sp["f"] * (1.0 - k_c), 1e-4)
++
++    # Componente aut├│nomo y elasticidad efectiva seg├║n modo desagregado vs legacy
++    x0 = sp.get("x0", 0.0)
++    x1 = sp.get("x1", 0.0)
++    Y_star = sp.get("Y_star", 0.0)
++    m0 = sp.get("m0", 0.0)
++    use_disaggregated = (x0 != 0.0 or m0 != 0.0 or x1 != 0.0 or Y_star != 0.0)
++
++    if use_disaggregated:
++        NX0_eff = x0 + x1 * Y_star - m0
++        ml_ok = (sp["epsilon_x"] + sp["epsilon_m"]) > 1.0
++        if j_curve_active:
++            eps_x_eff = 0.10
++            eps_m_eff = 0.10
++        elif ml_ok:
++            eps_x_eff = sp["epsilon_x"]
++            eps_m_eff = sp["epsilon_m"]
++        else:
++            eps_x_eff = -(sp["epsilon_m"] - sp["epsilon_x"])
++            eps_m_eff = sp["epsilon_m"]
++        eps_eff_sx = eps_x_eff * (1.0 + s_x) + eps_m_eff
+     else:
+-        eps_eff = -(sp["epsilon_m"] - sp["epsilon_x"])
+-
+-    # Sistema 2x2: IS y BP simult├íneas (Y, r)
+-    # IS: Y┬╖slope - ╬╡_x┬╖q┬╖k_m + b┬╖k_m┬╖r = k_m┬╖A_auto  ΓåÆ Y┬╖slope + b┬╖k_m┬╖r = k_m┬╖(A_auto + ╬╡_x┬╖q)
+-    # BP: -m1┬╖Y/f + r = r* + ╬öEΓéæ - NX0/f - ╬╡_eff┬╖q/f
+-    #
+-    # Forma matricial: [slope, b┬╖k_m] [Y]   [k_m┬╖(A_auto + ╬╡_x┬╖q)          ]
+-    #                  [-m1/f, 1    ] [r] = [r* + ╬öEΓéæ - NX0/f - ╬╡_eff┬╖q/f ]
+-
+-    rhs_bp = r_star + delta_E_expected - sp["NX0"] / sp["f"] - eps_eff * q / sp["f"]
++        NX0_eff = sp["NX0"]
++        ml_ok = (sp["epsilon_x"] + sp["epsilon_m"]) > 1.0
++        if j_curve_active:
++            eps_eff = 0.10
++        elif ml_ok:
++            eps_eff = sp["epsilon_x"]
++        else:
++            eps_eff = -(sp["epsilon_m"] - sp["epsilon_x"])
++        eps_eff_sx = eps_eff * (1.0 + s_x)
++
++    # Componente aut├│nomo (sin t├⌐rmino de r; se separa para el sistema lineal)
++    A_auto = sp["c0"] + sp["c1"] * Tr + sp["I0"] - rho_k * t_k + G_total + NX0_eff
++
++    # ΓöÇΓöÇ 3. Sistema 2├ù2: IS y BP simult├íneas (Y, r) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    m1_eff = sp["m1"] * (1.0 - tau)  # propensi├│n marginal a importar efectiva
++    rhs_bp = (
++        r_star + delta_E_expected + rho
++        - NX0_eff / f_eff
++        - eps_eff_sx * q / f_eff
++    )
+ 
+     A_mat = np.array([
+-        [slope,          sp["b"] * k_m],
+-        [-sp["m1"] / sp["f"], 1.0],
++        [1.0,              sp["b"] * k_m],
++        [-m1_eff / f_eff,  1.0          ],
+     ])
+     b_vec = np.array([
+-        k_m * (A_auto + sp["epsilon_x"] * q),
++        k_m * (A_auto + eps_eff_sx * q),
+         rhs_bp,
+     ])
+ 
+@@ -433,25 +571,41 @@ def eq_fixed_v2(
+         sol = np.linalg.solve(A_mat, b_vec)
+         Y, r = float(sol[0]), float(sol[1])
+     except np.linalg.LinAlgError:
+-        # Sistema singular: recurrir a soluci├│n simplificada r = r*
+-        r = r_star + delta_E_expected
+-        A_simple = compute_autonomous_demand(sp["c0"], sp["I0"], G, sp["NX0"], r, sp["b"])
+-        Y = k_m * (A_simple + eps_eff * q)
+-
+-    # 4. M end├│gena (para satisfacer LM dado Y y r)
+-    M_real = k_m * Y / k_m   # reescalado ΓÇö en realidad: M_real satisface LM
+-    # LM: r = (k┬╖Y - M_real) / h ΓåÆ M_real = k┬╖Y - h┬╖r
+-    M_real_eq = sp["k"] * Y - sp["h"] * r
+-    M_endo = M_real_eq * P_local  # convertir a nominal
++        # Sistema singular: recurrir a soluci├│n simplificada r = r* + ╬öEΓéæ + ╧ü
++        r = r_star + delta_E_expected + rho
++        Y = k_m * (A_auto + eps_eff_sx * q - sp["b"] * r)
+ 
+-    # 5. Variables derivadas
+-    NX    = compute_NX(sp["NX0"], sp["epsilon_x"], sp["epsilon_m"],
+-                       q, sp["m1"], Y, j_curve_active)
+-    C     = sp["c0"] + sp["c1"] * Y * (1.0 - sp["t"])
+-    I_inv = sp["I0"] - sp["b"] * r
++    # ΓöÇΓöÇ 4. M end├│gena (LM) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    M_real_eq = sp["k"] * Y - sp["h"] * r
++    M_endo = M_real_eq * P_local
++
++    # ΓöÇΓöÇ 5. Variables derivadas ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    NX, X, M_imp = compute_NX(
++        sp["NX0"], sp["epsilon_x"], sp["epsilon_m"],
++        q, sp["m1"], Y, j_curve_active,
++        x0=sp.get("x0", 0.0), x1=sp.get("x1", 0.0),
++        Y_star=sp.get("Y_star", 0.0), m0=sp.get("m0", 0.0),
++        tau=tau, s_x=s_x,
++    )
++    C     = sp["c0"] + sp["c1"] * (Y * (1.0 - t_c) + Tr)
++    I_inv = sp["I0"] - sp["b"] * r - rho_k * t_k
+     mult  = k_m
+     gap   = (Y - Y_pot) / Y_pot if Y_pot > 0 else 0.0
+-    A_dom = C + I_inv + G
++    A_dom = C + I_inv + G_total   # Absorci├│n dom├⌐stica (SIN NX)
++
++    # Econom├¡a Dual (FASE 3.1)
++    P_T = E * P_star * (1.0 + tau)
++    q_int, Y_T, Y_NT = compute_sectoral_composition(Y, P_T, P_NT, sp["alpha_PT"])
++
++    # ΓöÇΓöÇ FIX F-01: Verificaci├│n de identidad macroecon├│mica Y = C+I+G+NX ΓöÇΓöÇΓöÇΓöÇΓöÇ
++    _identity_gap = abs(Y - (A_dom + NX))
++    if _identity_gap > 1e-3:
++        _log.warning(
++            "[eq_fixed_v2] Identidad Y = C+I+G+NX violada. "
++            "Y=%.6f, C+I+G+NX=%.6f, brecha=%.6f. "
++            "Revisar calibraci├│n de eps_eff o par├ímetros del escenario.",
++            Y, A_dom + NX, _identity_gap,
++        )
+ 
+     return EquilibriumV2(
+         Y=round(Y, 6),
+@@ -459,6 +613,9 @@ def eq_fixed_v2(
+         E_endo=float("nan"),        # E es ex├│geno bajo TC fijo
+         M_endo=round(M_endo, 6),
+         NX=round(NX, 6),
++        X=round(X, 6),
++        M_imp=round(M_imp, 6),
++        G_total=round(G_total, 6),
+         C=round(C, 6),
+         I_inv=round(I_inv, 6),
+         mult=round(mult, 6),
+@@ -467,6 +624,10 @@ def eq_fixed_v2(
+         M_real=round(M_real_eq, 6),
+         gap=round(gap, 6),
+         A_domestic=round(A_dom, 6),
++        P_T=round(P_T, 6),
++        q_int=round(q_int, 6),
++        Y_T=round(Y_T, 6),
++        Y_NT=round(Y_NT, 6),
+     )
+ 
+ 
+@@ -483,19 +644,19 @@ def eq_flexible_v2(
+     delta_E_external: float = 0.0,
+     max_iter: int = 200,
+     tol: float = 1e-6,
++    rho: float = 0.0,  # FASE 3.1
+ ) -> EquilibriumV2:
+     """
+-    Equilibrio IS-LM-BP bajo Tipo de Cambio FLEXIBLE.
++    Equilibrio IS-LM-BP bajo Tipo de Cambio FLEXIBLE (V2.1).
+ 
+     Bajo TC flexible:
+     - M es ex├│gena (instrumento del banco central).
+     - E se determina end├│genamente para limpiar el mercado externo.
+ 
++    V2.1 incorpora: G_c+I_g=G_total, Tr, t_c, t_k, rho_k, tau, s_x, k_c.
+     La dependencia circular E ΓåÆ P_local ΓåÆ M_real ΓåÆ (Y, r) ΓåÆ NX ΓåÆ E
+     se resuelve iterativamente con criterio de convergencia |╬öE| < tol.
+ 
+-    Dentro de cada iteraci├│n, el sistema IS-LM-BP se resuelve con fsolve.
+-
+     Parameters
+     ----------
+     sp               : Par├ímetros estructurales
+@@ -511,6 +672,7 @@ def eq_flexible_v2(
+                        credibilidad). Se suma al delta_E end├│geno en la BP.
+     max_iter         : M├íximo de iteraciones del loop externo
+     tol              : Criterio de convergencia en E
++    rho              : Prima de riesgo soberano (riesgo pa├¡s)
+ 
+     Returns
+     -------
+@@ -518,27 +680,68 @@ def eq_flexible_v2(
+     """
+     M      = pi["M"]
+     r_star = pi["r_star"]
+-    G      = pi["G"]
+     P_star = sp["P_star"]
+ 
+-    k_m   = compute_multiplier(sp["c1"], sp["t"], sp["m1"])
+-    slope = 1.0 - sp["c1"] * (1.0 - sp["t"]) + sp["m1"]
+-
+-    # Elasticidad efectiva seg├║n M-L y J-curve
+-    ml_ok = (sp["epsilon_x"] + sp["epsilon_m"]) > 1.0
+-    if j_curve_active:
+-        eps_eff = 0.10
+-    elif ml_ok:
+-        eps_eff = sp["epsilon_x"]
++    # ΓöÇΓöÇ 1. Extraer instrumentos V2.1 con retrocompatibilidad ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    G_c   = pi.get("G_c",  pi.get("G", 20.0))
++    I_g   = pi.get("I_g",  0.0)
++    Tr    = pi.get("Tr",   0.0)
++    t_c   = pi.get("t_c",  sp.get("t", 0.20))
++    t_k   = pi.get("t_k",  0.0)
++    tau   = pi.get("tau",  0.0)
++    s_x   = pi.get("s_x",  0.0)
++    k_c   = pi.get("k_c",  0.0)
++    rho_k = sp.get("rho_k", 0.0)
++
++    G_total = G_c + I_g
++    pi = dict(pi)
++    pi["G"] = G_total
++
++    # ΓöÇΓöÇ Par├ímetros efectivos ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    k_m   = compute_multiplier(sp["c1"], t_c, sp["m1"], tau)
++    m1_eff = sp["m1"] * (1.0 - tau)
++    f_eff  = max(sp["f"] * (1.0 - k_c), 1e-4)
++
++    # Componente aut├│nomo y elasticidad efectiva seg├║n modo desagregado vs legacy
++    x0 = sp.get("x0", 0.0)
++    x1 = sp.get("x1", 0.0)
++    Y_star = sp.get("Y_star", 0.0)
++    m0 = sp.get("m0", 0.0)
++    use_disaggregated = (x0 != 0.0 or m0 != 0.0 or x1 != 0.0 or Y_star != 0.0)
++
++    if use_disaggregated:
++        NX0_eff = x0 + x1 * Y_star - m0
++        ml_ok = (sp["epsilon_x"] + sp["epsilon_m"]) > 1.0
++        if j_curve_active:
++            eps_x_eff = 0.10
++            eps_m_eff = 0.10
++        elif ml_ok:
++            eps_x_eff = sp["epsilon_x"]
++            eps_m_eff = sp["epsilon_m"]
++        else:
++            eps_x_eff = -(sp["epsilon_m"] - sp["epsilon_x"])
++            eps_m_eff = sp["epsilon_m"]
++        eps_eff_sx = eps_x_eff * (1.0 + s_x) + eps_m_eff
+     else:
+-        eps_eff = -(sp["epsilon_m"] - sp["epsilon_x"])
++        NX0_eff = sp["NX0"]
++        ml_ok = (sp["epsilon_x"] + sp["epsilon_m"]) > 1.0
++        if j_curve_active:
++            eps_eff = 0.10
++        elif ml_ok:
++            eps_eff = sp["epsilon_x"]
++        else:
++            eps_eff = -(sp["epsilon_m"] - sp["epsilon_x"])
++        eps_eff_sx = eps_eff * (1.0 + s_x)
++
++    # Demanda aut├│noma (sin el t├⌐rmino -b*r)
++    A_auto_base = sp["c0"] + sp["c1"] * Tr + sp["I0"] - rho_k * t_k + G_total + NX0_eff
+ 
+     # Punto inicial de E
+     E_current = E_guess if E_guess is not None else E_prev
+ 
+     # Loop de convergencia externo (circular E Γåö P_local)
+     for _ in range(max_iter):
+-        P_local = compute_price_level(E_current, P_star, P_NT, sp["alpha_PT"])
++        P_local = compute_price_level(E_current, P_star, P_NT, sp["alpha_PT"], tau=tau)
+         M_real  = M / P_local
+         q       = compute_real_exchange_rate(E_current, P_star, P_local)
+ 
+@@ -553,23 +756,28 @@ def eq_flexible_v2(
+         def system(vars: np.ndarray) -> list[float]:
+             Y_s, r_s, E_s = float(vars[0]), float(vars[1]), float(vars[2])
+             E_s_safe = max(1e-4, E_s)
+-            P_loc_s = compute_price_level(E_s_safe, P_star, P_NT, sp["alpha_PT"])
++            P_loc_s = compute_price_level(E_s_safe, P_star, P_NT, sp["alpha_PT"], tau=tau)
+             P_loc_s = max(1e-4, P_loc_s)
+-            q_s     = compute_real_exchange_rate(E_s_safe, P_star, P_loc_s)
++            q_s      = compute_real_exchange_rate(E_s_safe, P_star, P_loc_s)
+             M_real_s = M / P_loc_s
+ 
+-            A_s  = compute_autonomous_demand(sp["c0"], sp["I0"], G, sp["NX0"], r_s, sp["b"])
+-            NX_s = compute_NX(sp["NX0"], sp["epsilon_x"], sp["epsilon_m"],
+-                              q_s, sp["m1"], Y_s, j_curve_active)
++            # NX_s: usamos la versi├│n escalar (NX, X, M_imp)[0]
++            NX_s, _, _ = compute_NX(
++                sp["NX0"], sp["epsilon_x"], sp["epsilon_m"],
++                q_s, sp["m1"], Y_s, j_curve_active,
++                x0=sp.get("x0", 0.0), x1=sp.get("x1", 0.0),
++                Y_star=sp.get("Y_star", 0.0), m0=sp.get("m0", 0.0),
++                tau=tau, s_x=s_x,
++            )
+ 
+             delta_E_e = (E_s_safe - E_prev) / max(E_prev, 1e-9) + delta_E_external
+ 
+-            # IS: Y = k_m ┬╖ (A + ╬╡_x┬╖q)
+-            eq_IS = Y_s - k_m * (A_s + eps_eff * q_s)
++            # IS: Y = k_m ┬╖ (A_auto_base - b┬╖r + eps_eff_sx┬╖q)
++            eq_IS = Y_s - k_m * (A_auto_base - sp["b"] * r_s + eps_eff_sx * q_s)
+             # LM: r = (k┬╖Y - M_real) / h
+             eq_LM = r_s - (sp["k"] * Y_s - M_real_s) / sp["h"]
+-            # BP: r = r* + ╬öEΓéæ - NX/f
+-            eq_BP = r_s - compute_bp_curve(r_star, delta_E_e, NX_s, sp["f"])
++            # BP: r = r* + ╬öEΓéæ + ╧ü - NX/f_eff
++            eq_BP = r_s - compute_bp_curve(r_star, delta_E_e, NX_s, f_eff, rho=rho)
+             return [eq_IS, eq_LM, eq_BP]
+ 
+         try:
+@@ -586,16 +794,35 @@ def eq_flexible_v2(
+         E_current = E_new
+ 
+     # Calcular valores finales con E convergido
+-    P_local_f = compute_price_level(E_current, P_star, P_NT, sp["alpha_PT"])
++    P_local_f = compute_price_level(E_current, P_star, P_NT, sp["alpha_PT"], tau=tau)
+     q_f       = compute_real_exchange_rate(E_current, P_star, P_local_f)
+     M_real_f  = M / P_local_f
+ 
+-    NX    = compute_NX(sp["NX0"], sp["epsilon_x"], sp["epsilon_m"],
+-                       q_f, sp["m1"], Y_new, j_curve_active)
+-    C     = sp["c0"] + sp["c1"] * Y_new * (1.0 - sp["t"])
+-    I_inv = sp["I0"] - sp["b"] * r_new
++    NX, X, M_imp = compute_NX(
++        sp["NX0"], sp["epsilon_x"], sp["epsilon_m"],
++        q_f, sp["m1"], Y_new, j_curve_active,
++        x0=sp.get("x0", 0.0), x1=sp.get("x1", 0.0),
++        Y_star=sp.get("Y_star", 0.0), m0=sp.get("m0", 0.0),
++        tau=tau, s_x=s_x,
++    )
++    C     = sp["c0"] + sp["c1"] * (Y_new * (1.0 - t_c) + Tr)
++    I_inv = sp["I0"] - sp["b"] * r_new - rho_k * t_k
+     gap   = (Y_new - Y_pot) / Y_pot if Y_pot > 0 else 0.0
+-    A_dom = C + I_inv + G
++    A_dom = C + I_inv + G_total   # Absorci├│n dom├⌐stica (SIN NX)
++
++    # Econom├¡a Dual (FASE 3.1)
++    P_T = E_current * P_star * (1.0 + tau)
++    q_int, Y_T, Y_NT = compute_sectoral_composition(Y_new, P_T, P_NT, sp["alpha_PT"])
++
++    # ΓöÇΓöÇ FIX F-01: Verificaci├│n de identidad macroecon├│mica Y = C+I+G+NX ΓöÇΓöÇΓöÇΓöÇΓöÇ
++    _identity_gap = abs(Y_new - (A_dom + NX))
++    if _identity_gap > 1e-3:
++        _log.warning(
++            "[eq_flexible_v2] Identidad Y = C+I+G+NX violada. "
++            "Y=%.6f, C+I+G+NX=%.6f, brecha=%.6f. "
++            "Revisar convergencia del solver o par├ímetros del escenario.",
++            Y_new, A_dom + NX, _identity_gap,
++        )
+ 
+     return EquilibriumV2(
+         Y=round(Y_new, 6),
+@@ -603,6 +830,9 @@ def eq_flexible_v2(
+         E_endo=round(E_current, 6),
+         M_endo=float("nan"),        # M es ex├│gena bajo TC flexible
+         NX=round(NX, 6),
++        X=round(X, 6),
++        M_imp=round(M_imp, 6),
++        G_total=round(G_total, 6),
+         C=round(C, 6),
+         I_inv=round(I_inv, 6),
+         mult=round(k_m, 6),
+@@ -611,6 +841,10 @@ def eq_flexible_v2(
+         M_real=round(M_real_f, 6),
+         gap=round(gap, 6),
+         A_domestic=round(A_dom, 6),
++        P_T=round(P_T, 6),
++        q_int=round(q_int, 6),
++        Y_T=round(Y_T, 6),
++        Y_NT=round(Y_NT, 6),
+     )
+ 
+ 
+@@ -808,6 +1045,7 @@ def solve_equilibrium_v2(
+     r_prev: Optional[float] = None,
+     j_curve_active: bool = False,
+     delta_E_expected: float = 0.0,
++    rho: float = 0.0,  # FASE 3.1
+ ) -> EquilibriumV2:
+     """
+     Dispatcher: selecciona el solver seg├║n el r├⌐gimen cambiario.
+@@ -826,6 +1064,7 @@ def solve_equilibrium_v2(
+                         Bajo r├⌐gimen fijo: se suma a r_BP.
+                         Bajo flexible: se a├▒ade al delta_E end├│geno en BP.
+                         Bajo crawling peg: ignorado (usa crawl_rate).
++    rho               : Prima de riesgo soberano (riesgo pa├¡s)
+ 
+     Returns
+     -------
+@@ -844,6 +1083,7 @@ def solve_equilibrium_v2(
+             Y_pot=Y_pot, P_NT=P_NT,
+             delta_E_expected=delta_E_expected,
+             j_curve_active=j_curve_active,
++            rho=rho,  # FASE 3.1
+         )
+ 
+     elif regime == "flexible":
+@@ -857,6 +1097,7 @@ def solve_equilibrium_v2(
+             E_guess=E_guess_crisis,
+             j_curve_active=j_curve_active,
+             delta_E_external=delta_E_expected,
++            rho=rho,  # FASE 3.1
+         )
+ 
+     elif regime == "crawling_peg":
+@@ -867,6 +1108,7 @@ def solve_equilibrium_v2(
+             E_prev=E_prev,
+             crawl_rate=crawl_rate,
+             j_curve_active=j_curve_active,
++            rho=rho,  # FASE 3.1
+         )
+ 
+     else:

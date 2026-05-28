@@ -447,10 +447,11 @@ class SimStateManagerV2:
                 )
                 events.append(shock_event)
 
-        events_triggered = []
+        events_endogenos = [ev for ev in events if ev.get("type") == "endogenous"]
+        events_exogenos = [ev for ev in events if ev.get("type") == "exogenous"]
+        events_triggered = [ev["event_id"] for ev in events_endogenos + events_exogenos]
         for ev in events:
             apply_event_deltas(state, ev)
-            events_triggered.append(ev["event_id"])
 
         # ── PASO 2: APLICAR CAMBIOS DE POLÍTICA ───────────────────────────────
         sp: StructuralParams = dict(state["structural"])
@@ -782,7 +783,7 @@ class SimStateManagerV2:
             "score":          0,  # Provisional
             "mult":           round(eq["mult"], 4),
             "policy_applied": dict(pi),
-            "events_triggered": list(state.get("active_events", [])),
+            "events_triggered": events_triggered,
             "X":              round(eq.get("X", float("nan")), 4),
             "M_imp":          round(eq.get("M_imp", float("nan")), 4),
             "Y_T":            round(eq.get("Y_T", 0.0), 4),
@@ -832,7 +833,7 @@ class SimStateManagerV2:
             "score":          score_t,
             "mult":           round(eq["mult"], 4),
             "policy_applied": dict(pi),
-            "events_triggered": list(state.get("active_events", [])),
+            "events_triggered": events_triggered,
             "X":              round(eq.get("X", float("nan")), 4),
             "M_imp":          round(eq.get("M_imp", float("nan")), 4),
             "Y_T":            round(eq.get("Y_T", 0.0), 4),

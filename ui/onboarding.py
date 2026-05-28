@@ -213,11 +213,7 @@ def render_onboarding_panel(mgr: SimStateManagerV2) -> None:
         </style>
         """, unsafe_allow_html=True)
 
-        col_logo, col_titulo = st.columns([1, 6])
-        with col_logo:
-            st.image("assets/logo.png", width=75)
-        with col_titulo:
-            st.title("THE ECONOMIC WAR ROOM")
+        st.title("THE ECONOMIC WAR ROOM")
         st.markdown("<div class='onboarding-subtitle'>\"Bienvenido, Ministro de Economía. El país lo espera. Las decisiones son suyas.\"</div>", unsafe_allow_html=True)
 
         # Inicializar estado de onboarding en st.session_state

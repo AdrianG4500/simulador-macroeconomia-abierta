@@ -391,3 +391,11 @@ def get_scenario_params(key: str) -> tuple[StructuralParams, PolicyInstruments, 
     pi: PolicyInstruments = dict(preset["policy"])          # type: ignore[assignment]
     init: dict = dict(preset["initial_state"])
     return sp, pi, init
+
+try:
+    import streamlit as st
+    get_base_params_v2 = st.cache_data(get_base_params_v2)
+    get_scenario_params = st.cache_data(get_scenario_params)
+except ImportError:
+    pass
+

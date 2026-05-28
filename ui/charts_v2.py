@@ -157,6 +157,7 @@ def plot_economic_cycle(history: list[TurnSnapshot]) -> go.Figure:
 # CHART 3: TERMÓMETRO DE RESERVAS (GAUGE SEMAFÓRICO)
 # ─────────────────────────────────────────────────────────────────────────────
 
+@st.cache_data
 def plot_reserves_thermometer(R_curr: float, R_0: float) -> go.Figure:
     """
     Rinde un gráfico tipo Gauge interactivo para monitorizar las reservas internacionales.
@@ -285,6 +286,7 @@ def plot_debt_snowball(history: list[dict], current_state: dict = None) -> go.Fi
     apply_chart_theme(fig, theme)
     return fig
 
+@st.cache_data
 def plot_islm_bp_dynamic(current_state: dict, params: dict) -> go.Figure:
     """
     Diagrama IS-LM-BP estático e ilustrativo del equilibrio del turno actual.
@@ -654,6 +656,7 @@ def plot_sectoral_composition(history: list[dict]) -> go.Figure:
     return fig
 
 
+@st.cache_data
 def plot_fiscal_odometer(current_state: dict) -> go.Figure:
     """
     Rinde un gráfico tipo Waterfall (Cascada) del Balance Fiscal en el último turno.
@@ -862,6 +865,7 @@ def plot_exchange_intervention(history: list[dict]) -> go.Figure:
     return fig
 
 
+@st.cache_data
 def plot_salter_swan(current_state: dict, params: dict) -> go.Figure:
     """
     Rinde el Diagrama de Salter-Swan dinámico (TCR vs Absorción Doméstica).
@@ -953,6 +957,7 @@ def plot_salter_swan(current_state: dict, params: dict) -> go.Figure:
 # GRÁFICOS PESTAÑA 3 y 4: FASE 5.2b — MERCADOS FINANCIEROS E HISTORIAL
 # =============================================================================
 
+@st.cache_data
 def plot_trilemma_ternary(current_state: dict) -> go.Figure:
     """
     Gráfico ternario del Trilema de Mundell-Fleming (Triángulo de Imposibilidad).

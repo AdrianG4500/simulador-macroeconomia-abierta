@@ -20,26 +20,15 @@ from ui.endgame_screen import render_endgame_screen
 
 
 def main():
-    import os
-    logo_path = "assets/logo.png"
-    icon = logo_path if os.path.exists(logo_path) else "🌎"
     try:
         st.set_page_config(
             page_title="The Economic War Room",
-            page_icon=icon,
+            page_icon="🌎",
             layout="wide",
             initial_sidebar_state="expanded"
         )
     except Exception:
-        try:
-            st.set_page_config(
-                page_title="The Economic War Room",
-                page_icon="🌎",
-                layout="wide",
-                initial_sidebar_state="expanded"
-            )
-        except Exception:
-            pass
+        pass
 
     
     # ── ESTILOS CSS PREMUM GLOBAL ──────────────────────────────────────────────

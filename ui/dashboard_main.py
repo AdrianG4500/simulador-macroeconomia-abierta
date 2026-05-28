@@ -31,32 +31,29 @@ from ui.charts_v2 import (
 import plotly.graph_objects as go
 
 def _render_kpi_card_with_history(label: str, val_current: float, target: float, unit: str, history_snaps: list, value_key: str, is_lower_better: bool = False, is_pi_nt: bool = False) -> tuple[str, go.Figure, str]:
-    import math
-    history_values = []
-    semestres = []
+    import numpy as np
     
-    for snap in history_snaps[-5:]:
-        t = snap.get("t", 0)
-        semestres.append(f"t={t}")
-        if is_pi_nt:
-            val = snap.get("pi_e", 0.03) * 100.0 - 0.2
-        else:
-            val = snap.get(value_key, 0.0)
-            if value_key in ["pi", "U"]:
-                val *= 100.0
-        history_values.append(val)
+    snaps_subset = history_snaps[-5:]
+    if not snaps_subset:
+        return "", go.Figure(), "#38bdf8"
         
-    deviations = []
-    for val in history_values:
-        if is_lower_better:
-            dev = target - val
-        else:
-            dev = val - target
-        deviations.append(dev)
-        
-    current_dev = deviations[-1] if deviations else 0.0
+    semestres = [f"t={snap.get('t', 0)}" for snap in snaps_subset]
     
-    current_snap = history_snaps[-1] if history_snaps else {}
+    # Arreglo numpy optimizado para evitar bucles repetitivos y accesos lentos
+    if is_pi_nt:
+        history_values = np.array([snap.get("pi_e", 0.03) for snap in snaps_subset], dtype=float) * 100.0 - 0.2
+    else:
+        multiplier = 100.0 if value_key in ["pi", "U"] else 1.0
+        history_values = np.array([snap.get(value_key, 0.0) for snap in snaps_subset], dtype=float) * multiplier
+        
+    if is_lower_better:
+        deviations = target - history_values
+    else:
+        deviations = history_values - target
+        
+    current_dev = float(deviations[-1])
+    
+    current_snap = snaps_subset[-1]
     current_t = current_snap.get("t", 0)
 
     if current_t == 0:
@@ -96,7 +93,7 @@ def _render_kpi_card_with_history(label: str, val_current: float, target: float,
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=semestres,
-        y=deviations,
+        y=deviations.tolist(),
         marker_color=color,
         width=0.25,
         hovertemplate="Semestre %{x}: %{y:+.2f}<extra></extra>"
@@ -284,17 +281,9 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
     
     # ── TAREA 4: SECTOR CENTRAL (Área de Trabajo Analítica) ─────────────────
     with col_centro:
-        import base64
-        import os
-        logo_base64 = ""
-        if os.path.exists("assets/logo.png"):
-            with open("assets/logo.png", "rb") as f:
-                logo_base64 = base64.b64encode(f.read()).decode("utf-8")
-        logo_src = f"data:image/png;base64,{logo_base64}" if logo_base64 else "app/static/assets/logo.png"
         st.markdown(
-            f"""
+            """
             <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 20px;">
-                <img src="{logo_src}" style="height: 50px; width: auto;">
                 <h1 style="margin: 0; font-size: 2.5rem;">Tablero de Mando Soberano</h1>
             </div>
             """,
@@ -335,26 +324,26 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
         row1 = st.columns(3)
         with row1[0]:
             st.markdown(pib_html, unsafe_allow_html=True)
-            st.plotly_chart(pib_fig, use_container_width=True, theme=None, key="kpi_pib")
+            st.plotly_chart(pib_fig, use_container_width=True, theme=None, key="kpi_pib", config={'displayModeBar': False})
         with row1[1]:
             st.markdown(pi_t_html, unsafe_allow_html=True)
-            st.plotly_chart(pi_t_fig, use_container_width=True, theme=None, key="kpi_pi_t")
+            st.plotly_chart(pi_t_fig, use_container_width=True, theme=None, key="kpi_pi_t", config={'displayModeBar': False})
         with row1[2]:
             st.markdown(pi_nt_html, unsafe_allow_html=True)
-            st.plotly_chart(pi_nt_fig, use_container_width=True, theme=None, key="kpi_pi_nt")
+            st.plotly_chart(pi_nt_fig, use_container_width=True, theme=None, key="kpi_pi_nt", config={'displayModeBar': False})
 
         st.write("")
 
         row2 = st.columns(3)
         with row2[0]:
             st.markdown(u_html, unsafe_allow_html=True)
-            st.plotly_chart(u_fig, use_container_width=True, theme=None, key="kpi_u")
+            st.plotly_chart(u_fig, use_container_width=True, theme=None, key="kpi_u", config={'displayModeBar': False})
         with row2[1]:
             st.markdown(r_html, unsafe_allow_html=True)
-            st.plotly_chart(r_fig, use_container_width=True, theme=None, key="kpi_r")
+            st.plotly_chart(r_fig, use_container_width=True, theme=None, key="kpi_r", config={'displayModeBar': False})
         with row2[2]:
             st.markdown(score_html, unsafe_allow_html=True)
-            st.plotly_chart(score_fig, use_container_width=True, theme=None, key="kpi_score")
+            st.plotly_chart(score_fig, use_container_width=True, theme=None, key="kpi_score", config={'displayModeBar': False})
         
         # 2. Sistema de Pestañas (Tabs)
         tab1, tab2, tab3, tab4 = st.tabs([
@@ -369,46 +358,46 @@ def render_game_dashboard(mgr: SimStateManagerV2) -> None:
             col_t1a, col_t1b = st.columns(2)
             with col_t1a:
                 fig_gdp = plot_gdp_decomposition(history)
-                st.plotly_chart(fig_gdp, use_container_width=True, theme=None, key="chart_gdp")
+                st.plotly_chart(fig_gdp, use_container_width=True, theme=None, key="chart_gdp", config={'displayModeBar': False})
             with col_t1b:
                 fig_sectoral = plot_sectoral_composition(history)
-                st.plotly_chart(fig_sectoral, use_container_width=True, theme=None, key="chart_sectoral")
+                st.plotly_chart(fig_sectoral, use_container_width=True, theme=None, key="chart_sectoral", config={'displayModeBar': False})
             fig_fiscal = plot_fiscal_odometer(last_snap)
-            st.plotly_chart(fig_fiscal, use_container_width=True, theme=None, key="chart_fiscal")
+            st.plotly_chart(fig_fiscal, use_container_width=True, theme=None, key="chart_fiscal", config={'displayModeBar': False})
 
         with tab2:
             st.markdown("### 💱 Relaciones Comerciales y Tipo de Cambio")
             fig_butterfly = plot_butterfly_trade(history)
-            st.plotly_chart(fig_butterfly, use_container_width=True, theme=None, key="chart_butterfly")
+            st.plotly_chart(fig_butterfly, use_container_width=True, theme=None, key="chart_butterfly", config={'displayModeBar': False})
             col_t2a, col_t2b = st.columns(2)
             with col_t2a:
                 fig_intervention = plot_exchange_intervention(history)
-                st.plotly_chart(fig_intervention, use_container_width=True, theme=None, key="chart_intervention")
+                st.plotly_chart(fig_intervention, use_container_width=True, theme=None, key="chart_intervention", config={'displayModeBar': False})
             with col_t2b:
                 fig_salter = plot_salter_swan(last_snap, mgr.state["structural"])
-                st.plotly_chart(fig_salter, use_container_width=True, theme=None, key="chart_salter")
+                st.plotly_chart(fig_salter, use_container_width=True, theme=None, key="chart_salter", config={'displayModeBar': False})
 
         with tab3:
             st.markdown("### 📈 Mercados Financieros y Deuda Soberana")
             fig_islm = plot_islm_bp_dynamic(last_snap, mgr.state["structural"])
-            st.plotly_chart(fig_islm, use_container_width=True, theme=None, key="chart_islm")
+            st.plotly_chart(fig_islm, use_container_width=True, theme=None, key="chart_islm", config={'displayModeBar': False})
             col_t3a, col_t3b = st.columns(2)
             with col_t3a:
                 fig_trilemma = plot_trilemma_ternary(last_snap)
-                st.plotly_chart(fig_trilemma, use_container_width=True, theme=None, key="chart_trilemma")
+                st.plotly_chart(fig_trilemma, use_container_width=True, theme=None, key="chart_trilemma", config={'displayModeBar': False})
             with col_t3b:
                 fig_deuda = plot_debt_snowball(history, last_snap)
-                st.plotly_chart(fig_deuda, use_container_width=True, theme=None, key="chart_deuda")
+                st.plotly_chart(fig_deuda, use_container_width=True, theme=None, key="chart_deuda", config={'displayModeBar': False})
 
         with tab4:
             st.markdown("### 📚 Libro de Gestión Histórica y Decisiones")
             col_t4a, col_t4b = st.columns(2)
             with col_t4a:
                 fig_clock = plot_business_cycle_clock(history)
-                st.plotly_chart(fig_clock, use_container_width=True, theme=None, key="chart_clock")
+                st.plotly_chart(fig_clock, use_container_width=True, theme=None, key="chart_clock", config={'displayModeBar': False})
             with col_t4b:
                 fig_radar = plot_reelection_radar(history)
-                st.plotly_chart(fig_radar, use_container_width=True, theme=None, key="chart_radar")
+                st.plotly_chart(fig_radar, use_container_width=True, theme=None, key="chart_radar", config={'displayModeBar': False})
 
             # Libro Mayor de Decisiones en tiempo real
             st.markdown("#### 📚 Libro Mayor de Políticas Aplicadas")

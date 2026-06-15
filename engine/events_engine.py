@@ -56,25 +56,25 @@ EXOGENOUS_EVENTS_DEFS = {
         "prob": 0.10,
     },
     "fed_rate_shock": {
-        "headline": "🏦 LA FED ELEVA TASAS DE INTERÉS BRUSCAMENTE",
+        "headline": "🏦 LA FED ELEVA TASAS DE INTERÉS BRUSCAMNETE",
         "narrative": "La Reserva Federal de EE. UU. endurece su política monetaria para combatir la inflación doméstica. Los mercados internacionales experimentan un severo drenaje de liquidez.",
         "impact_text": "La tasa de interés de referencia internacional (r_star) aumenta en 400 puntos básicos (+4.0 puntos porcentuales).",
         "param_deltas": {"r_star": 4.0},  # r_star += 4.0
-        "prob": 0.15,
+        "prob": 0.02,
     },
     "global_recession": {
         "headline": "📉 RECESIÓN GLOBAL EN PUERTA: SE RETRAE LA DEMANDA",
         "narrative": "Una desaceleración económica en las grandes potencias mundiales reduce la demanda externa. Las ventas al extranjero sufren una fuerte contracción y la elasticidad cae.",
-        "impact_text": "Las exportaciones netas autónomas caen en 15, la elasticidad-precio de exportaciones cae un 20% y la demanda externa mundial (Y*) se reduce en 5.0.",
-        "param_deltas": {"NX0": -15.0, "epsilon_x": 0.80, "Y_star": -5.0},
-        "prob": 0.08,
+        "impact_text": "Las exportaciones netas autónomas caen en 9, la elasticidad-precio de exportaciones cae un 12% y la demanda externa mundial (Y*) se reduce en 3.0.",
+        "param_deltas": {"NX0": -9.0, "epsilon_x": 0.88, "Y_star": -3.0},
+        "prob": 0.02,
     },
     "tech_productivity": {
         "headline": "💻 BOOM DE PRODUCTIVIDAD: REVOLUCIÓN TECNOLÓGICA",
         "narrative": "La adopción masiva de nuevas herramientas informáticas y de inteligencia artificial optimiza procesos productivos de forma generalizada en el país.",
-        "impact_text": "La tasa de crecimiento potencial anual del PIB aumenta un 1% (+0.01) de forma permanente.",
-        "param_deltas": {"g_pot": 0.01},  # g_pot += 0.01
-        "prob": 0.05,
+        "impact_text": "La tasa de crecimiento potencial anual del PIB aumenta un 0.5% (+0.005) temporalmente por 4 turnos.",
+        "param_deltas": {"g_pot": 0.005},  # g_pot += 0.005
+        "prob": 0.02,
     },
     "natural_disaster": {
         "headline": "🚨 SEVERO DESASTRE NATURAL AZOTA LA CAPITAL",
@@ -114,33 +114,64 @@ def evaluate_events(state: GameState, seed_int: int) -> list[GameEvent]:
     # 1. EVALUAR TRIGGERS ENDÓGENOS
     active_prev = state.get("active_events", [])
 
+    # ── V4.2: HISTÉRESIS DE SHOCKS ────────────────────────────────────────────
+    # Si un macro-shock de gran magnitud (global_recession, natural_disaster) se
+    # disparó en este turno o en los 2 turnos previos, bloqueamos la detonación
+    # simultánea de social_unrest y bank_panic para evitar el "stacking"
+    # destructivo que colapsaba los escenarios en T3.
+    MACRO_SHOCKS = {"global_recession", "natural_disaster"}
+    HYSTERESIS_WINDOW = 2  # Turnos de bloqueo tras un macro-shock
+
+    endogenous_blocked = False
+    for shock_id in MACRO_SHOCKS:
+        shock_turn = get_event_trigger_turn(state, shock_id)
+        if shock_turn > 0 and (t_new - shock_turn) <= HYSTERESIS_WINDOW:
+            endogenous_blocked = True
+            break
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # Cooldown: no disparar social_unrest si estuvo activo en los últimos 5 snapshots
+    recent_triggered = []
+    for snap in state["history"][-5:]:
+        recent_triggered.extend(snap.get("events_triggered", []))
+    social_unrest_recent = "social_unrest" in recent_triggered
+
+    # Mitigar hipersensibilidad: evaluar si hubo un deterioro abrupto de la brecha en el corto plazo
+    prev_gap_val = state["history"][-2].get("gap", 0.0) if len(state["history"]) >= 2 else 0.0
+    gap_change = current_snap.get("gap", 0.0) - prev_gap_val
+    is_abrupt_shock = (gap_change < -0.25 and t_new <= 3)
+
     # ID: social_unrest
-    # Trigger: U > 0.12
-    if current_snap["U"] > 0.12 and "social_unrest" not in active_prev:
+    # Trigger: U > 0.12 con amortiguador contra shocks externos repentinos
+    if (current_snap["U"] > 0.12 
+        and "social_unrest" not in active_prev 
+        and not endogenous_blocked
+        and not social_unrest_recent
+        and not is_abrupt_shock):
         triggered.append(GameEvent(
             event_id="social_unrest",
             type="endogenous",
             headline="💥 GRAVES DISTURBIOS SOCIALES POR DESEMPLEO",
             narrative="La persistente falta de empleo ha desatado protestas masivas en las principales ciudades del país. La alta conflictividad social paraliza sectores clave y reduce la confianza de las familias.",
-            impact_text="El PIB potencial cae un 5% por la paralización de capital y la propensión marginal a consumir disminuye en 0.05.",
-            param_deltas={"Y_pot": 0.95, "c1": -0.05},
+            impact_text="El PIB potencial cae un 3% por la paralización de capital y la propensión marginal a consumir disminuye en 0.02.",
+            param_deltas={"Y_pot": 0.97, "c1": -0.02},
             prob=0.0,
             triggered_at=t_new
         ))
 
     # ID: bank_panic
-    # Trigger: R / (Y * P_local) < 0.05
+    # Trigger: R / (Y * P_local) < 0.05 (bloqueado 2 turnos tras macro-shock)
     # Nota: R es reservas y (Y * P_local) es el PIB nominal.
     nominal_gdp = current_snap["Y"] * current_snap["P_local"]
     reserves_gdp_ratio = current_snap["R"] / max(nominal_gdp, 1e-6)
-    if reserves_gdp_ratio < 0.05 and "bank_panic" not in active_prev:
+    if reserves_gdp_ratio < 0.05 and "bank_panic" not in active_prev and not endogenous_blocked:
         triggered.append(GameEvent(
             event_id="bank_panic",
             type="endogenous",
             headline="🏦 PÁNICO BANCARIO: CORRIDA CONTRA EL PESO",
             narrative="Las escasas reservas internacionales desatan rumores de devaluación y corralito. Los ahorristas acuden masivamente a retirar depósitos de los bancos comerciales y demandar dólares.",
             impact_text="Las expectativas de devaluación (delta_E_expected) aumentan al 20% para el próximo período, elevando la prima cambiaria.",
-            param_deltas={"delta_E_expected": 0.20},
+            param_deltas={"delta_E_expected": 0.05},
             prob=0.0,
             triggered_at=t_new
         ))
@@ -201,7 +232,11 @@ def evaluate_events(state: GameState, seed_int: int) -> list[GameEvent]:
             continue
 
         base_prob = ev_def["prob"]
-        adjusted_prob = min(0.95, base_prob * prob_mult)
+        if ev_id == "tech_productivity":
+            current_pi = current_snap.get("pi", 0.0)
+            adjusted_prob = base_prob * 0.15 if current_pi > 0.08 else min(0.95, base_prob * prob_mult)
+        else:
+            adjusted_prob = min(0.95, base_prob * prob_mult)
 
         # Muestreo de Bernoulli
         if prng.random() < adjusted_prob:
@@ -216,6 +251,10 @@ def evaluate_events(state: GameState, seed_int: int) -> list[GameEvent]:
                 triggered_at=t_new
             ))
 
+    # Limitar el sistema a un máximo estricto de 1 evento total por turno en la lista final
+    # para evitar que el stacking destruya las variables de control e interrumpa la simulación
+    if len(triggered) > 1:
+        triggered = sorted(triggered, key=lambda x: 1.0 if x.get('type') == 'endogenous' else x.get('prob', 0.0), reverse=True)[:1]
     return triggered
 
 
@@ -237,6 +276,9 @@ def apply_event_deltas(state: GameState, event: GameEvent) -> None:
 
     # Registrar el evento en el listado de activos y news_feed
     state["active_events"].append(event["event_id"])
+    if "event_durations" not in state:
+        state["event_durations"] = {}
+    state["event_durations"][event["event_id"]] = 0
 
     # Añadir a news_feed
     severity = "critical" if event["type"] == "endogenous" or event["event_id"] in ("natural_disaster", "fed_rate_shock") else "warning"
@@ -290,3 +332,83 @@ def apply_event_deltas(state: GameState, event: GameEvent) -> None:
         elif key == "G_needed":
             # Aditivo
             sp["G_needed"] = round(sp["G_needed"] + val, 4)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEMPORARY EVENTS AND REVERSION (R3)
+# ─────────────────────────────────────────────────────────────────────────────
+
+EVENT_DURATIONS = {
+    "commodity_supercycle": 3,
+    "fed_rate_shock": 2,
+    "global_recession": 2,
+    "tech_productivity": 4,   # Dura 4 turnos, no permanente
+    "natural_disaster": 3,
+    "social_unrest": 3,
+    "bank_panic": 1,
+    "stagflation_trap": 3,   # Permanente
+    "virtuous_circle": 3,
+}
+
+ALL_EVENTS_DELTAS = {
+    "commodity_supercycle": {"NX0": 20.0, "P_star": 1.10},
+    "fed_rate_shock": {"r_star": 4.0},
+    "global_recession": {"NX0": -9.0, "epsilon_x": 0.88, "Y_star": -3.0},
+    "tech_productivity": {"g_pot": 0.005},
+    "natural_disaster": {"Y_pot": 0.90, "G_needed": 5.0},
+    "social_unrest": {"Y_pot": 0.97, "c1": -0.02},
+    "bank_panic": {"delta_E_expected": 0.05},
+    "stagflation_trap": {"pi_0": 0.05},
+    "virtuous_circle": {"b": 0.5},
+}
+
+def revert_event_deltas(state: GameState, event_id: str) -> None:
+    """
+    Revierte con precisión las modificaciones aplicadas a StructuralParams o GameState por un evento.
+    """
+    if event_id not in ALL_EVENTS_DELTAS:
+        return
+
+    sp = state["structural"]
+    deltas = ALL_EVENTS_DELTAS[event_id]
+
+    for key, val in deltas.items():
+        if key == "Y_pot":
+            if val > 1e-6:
+                state["Y_pot"] = round(state["Y_pot"] / val, 4)
+        elif key == "delta_E_expected":
+            state["delta_E_expected"] = 0.0
+        elif key == "c1":
+            sp["c1"] = round(sp["c1"] - val, 4)
+        elif key == "pi_0":
+            sp["pi_0"] = round(sp["pi_0"] - val, 4)
+        elif key == "b":
+            sp["b"] = round(sp["b"] - val, 4)
+        elif key == "NX0":
+            sp["NX0"] = round(sp["NX0"] - val, 4)
+        elif key == "P_star":
+            if val > 1e-6:
+                sp["P_star"] = round(sp["P_star"] / val, 4)
+        elif key == "r_star":
+            if "r_star" in sp:
+                sp["r_star"] = round(sp["r_star"] - val, 4)
+            if "r_star" in state["policy"]:
+                state["policy"]["r_star"] = round(state["policy"]["r_star"] - val, 4)
+        elif key == "epsilon_x":
+            if val > 1e-6:
+                sp["epsilon_x"] = round(sp["epsilon_x"] / val, 4)
+        elif key == "Y_star":
+            sp["Y_star"] = round(sp["Y_star"] - val, 4)
+        elif key == "g_pot":
+            sp["g_pot"] = round(sp["g_pot"] - val, 4)
+        elif key == "G_needed":
+            sp["G_needed"] = round(sp["G_needed"] - val, 4)
+
+def get_event_trigger_turn(state: GameState, event_id: str) -> int:
+    """
+    Escanea el historial de snapshots del juego para determinar en qué turno se gatilló el evento.
+    """
+    for snap in state.get("history", []):
+        if "events_triggered" in snap and event_id in snap["events_triggered"]:
+            return snap["t"]
+    return 0

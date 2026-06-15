@@ -542,7 +542,7 @@ def test_bp_curve_uip_separation():
         rho=rho
     )
     
-    expected = r_star + delta_E_expected + rho - (NX / f)
+    expected = r_star + delta_E_expected + rho * 100.0 - (NX / f)
     
     assert abs(result - expected) < 1e-10, (
         f"La curva BP con separacion UIP falló. "

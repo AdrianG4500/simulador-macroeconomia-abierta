@@ -64,11 +64,22 @@ class StructuralParams(TypedDict):
     g_pot:     float   # Tasa de crecimiento del PIB potencial
 
     # Bloque mercado laboral y precios
-    U_n:        float  # NAIRU (tasa natural de desempleo)
-    gamma_okun: float  # Coeficiente de la Ley de Okun
-    alpha_inf:  float  # Pendiente de la curva de Phillips
-    pi_0:       float  # Inflación base adicional (estanflación)
-    G_needed:   float  # Gasto de reconstrucción requerido (desastre natural)
+    U_n:           float  # NAIRU (tasa natural de desempleo)
+    U_floor:       float  # Piso de desempleo friccional/estructural (V3.0: 3.5% emergentes)
+    gamma_okun:    float  # Coeficiente de la Ley de Okun
+    alpha_inf:     float  # Pendiente de la curva de Phillips
+    alpha_nonlinear: float  # Pendiente aceleración NAIRU no-lineal (V3.0)
+    pi_0:          float  # Inflación base adicional (estanflación)
+    G_needed:      float  # Gasto de reconstrucción requerido (desastre natural)
+
+    # Bloque inercia del consumo (V3.0 — Teoría del Ingreso Permanente)
+    lambda_h:   float  # Factor de persistencia de hábitos de consumo ∈ [0, 1]
+
+    # Bloque Crowding-In / Crowding-Out (V3.0)
+    psi_ci:     float  # Elasticidad crowding-in (inversión pública → I privada)
+    psi_co:     float  # Elasticidad crowding-out (deuda → I privada)
+    delta_kg:   float  # Tasa de depreciación del stock de capital público
+    debt_velocity_threshold: float  # Umbral de velocidad para riesgo país (V3.1)
 
 
 class PolicyInstruments(TypedDict):
@@ -93,9 +104,17 @@ class PolicyInstruments(TypedDict):
     k_c:         float  # Controles de capital ∈ [0, 1); 0 = libre movilidad
     theta:       float  # Encaje legal (reserva fraccionaria) ∈ [0, 1)
 
+    # Esterilización monetaria bajo TC Fijo (V3.0)
+    psi_s:       float  # Coeficiente de esterilización ∈ [0, 1]; 0=sin esterilizar
+
     # Cambiario y monetario
     E:           float  # Tipo de cambio nominal (exógeno bajo TC fijo / crawling)
-    M:           float  # Oferta monetaria (exógena bajo TC flexible)
+    M:           float  # Oferta monetaria (exógena bajo TC flexible / quantity mode)
+    r_ref:       Optional[float]  # Tasa de Política Monetaria (TPM) — instrumento en rate_targeting
+    monetary_mode: str  # "quantity" | "rate_targeting" (V3.0 Banca Moderna)
+    phi_pi:      float  # Coeficiente de inflación en Regla de Taylor
+    phi_Y:       float  # Coeficiente de output gap en Regla de Taylor
+    pi_target:   float  # Meta de inflación del banco central (Regla de Taylor)
     r_star:      float  # Tasa de interés internacional (exógena)
     regime:      str    # "fixed" | "flexible" | "crawling_peg" | "dirty_float"
     crawl_rate:  float  # Tasa de deslizamiento mensual (solo crawling_peg)
@@ -130,6 +149,7 @@ class EquilibriumV2(TypedDict):
     q_int:      float  # Tipo de cambio real interno (P_T / P_NT)
     Y_T:        float  # PIB del sector transable
     Y_NT:       float  # PIB del sector no-transable
+    FX_intervention: float  # Monto de intervención cambiaria esterilizada (V3.0)
 
 
 class SalterSwanResult(TypedDict):
@@ -191,11 +211,22 @@ DEFAULT_STRUCTURAL_PARAMS: StructuralParams = {
     "g_pot":     0.02,   # Crecimiento potencial anual 2%
 
     # Mercado laboral y precios
-    "U_n":        0.05,  # NAIRU 5%
-    "gamma_okun": 0.50,  # Coeficiente Okun
-    "alpha_inf":  0.50,  # Pendiente Phillips
-    "pi_0":       0.0,   # Inflación base adicional
-    "G_needed":   0.0,   # Gasto público de reconstrucción adicional
+    "U_n":           0.05,   # NAIRU 5%
+    "U_floor":       0.04,   # Piso friccional 4.0% (economías emergentes — V3.0)
+    "gamma_okun":    0.50,   # Coeficiente Okun
+    "alpha_inf":     0.50,   # Pendiente Phillips
+    "alpha_nonlinear": 0.5,  # Aceleración NAIRU no-lineal (V3.0)
+    "pi_0":          0.0,    # Inflación base adicional
+    "G_needed":      0.0,    # Gasto público de reconstrucción adicional
+
+    # Inercia del consumo (V3.0)
+    "lambda_h":   0.0,   # Sin inercia por defecto (retrocompatibilidad V2.0)
+
+    # Crowding-In / Crowding-Out (V3.0)
+    "psi_ci":     0.0,   # Sin crowding-in por defecto
+    "psi_co":     0.0,   # Sin crowding-out por defecto
+    "delta_kg":   0.05,  # Depreciación capital público 5% por turno
+    "debt_velocity_threshold": 0.10,  # Umbral de velocidad de deuda por defecto 10pp
 }
 
 DEFAULT_POLICY_INSTRUMENTS: PolicyInstruments = {
@@ -210,11 +241,18 @@ DEFAULT_POLICY_INSTRUMENTS: PolicyInstruments = {
     "tau":         0.0,  # Arancel (0 = libre comercio)
     "s_x":         0.0,  # Subsidio exportaciones (0 = ninguno)
     # Controles de flujo
-    "k_c":         0.0,  # Controles de capital (0 = libre movilidad)
+    "k_c":         0.0,   # Controles de capital (0 = libre movilidad)
     "theta":       0.10,  # Encaje legal (reserva fraccionaria base 10%)
+    # Esterilización monetaria (V3.0)
+    "psi_s":       0.0,   # Sin esterilización por defecto (retrocompat. V2.0)
     # Cambiario y monetario
     "E":          10.0,
     "M":          40.0,
+    "r_ref":      None,   # TPM: None = no activo (quantity mode por defecto)
+    "monetary_mode": "quantity",  # "quantity" | "rate_targeting" (V3.0)
+    "phi_pi":     1.5,    # Coeficiente Taylor para inflación (regla estándar)
+    "phi_Y":      0.5,    # Coeficiente Taylor para output gap
+    "pi_target":  0.03,   # Meta de inflación 3%
     "r_star":      5.0,
     "regime":     "fixed",
     "crawl_rate":  0.02,
@@ -238,7 +276,7 @@ SCENARIO_PRESETS: dict[str, dict] = {
             "epsilon_x":  0.435,   # Aumentado en 45% (original: 0.30)
             "epsilon_m":  0.5075,  # Aumentado en 45% (original: 0.35)
             "f":           1.0,   # Baja movilidad de capitales
-            "alpha_PT":    0.55,  # Alta exposición a bienes transables
+            "alpha_PT":    0.40,  # Alta exposición a bienes transables (calibrada 40/60)
             "beta_PT":     0.35,  # Alto pass-through
         },
         "policy": {
@@ -316,14 +354,21 @@ SCENARIO_PRESETS: dict[str, dict] = {
 
     "Economia_Saludable": {
         "description": "Economía de referencia — Condiciones base",
-        "structural": DEFAULT_STRUCTURAL_PARAMS,
-        "policy":     DEFAULT_POLICY_INSTRUMENTS,
+        "structural": {
+            **DEFAULT_STRUCTURAL_PARAMS,
+            "c0": 20.0,
+            "I0": 18.50,
+        },
+        "policy": {
+            **DEFAULT_POLICY_INSTRUMENTS,
+            "M": 70.0,
+        },
         "initial_state": {
             "Y_pot": 100.0,
             "P_NT":    1.0,
             "pi_e":   0.03,
             "R":      50.0,
-            "B":      60.0,
+            "B":      15.0,
         },
     },
 }

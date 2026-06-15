@@ -102,6 +102,8 @@ class TurnSnapshot(TypedDict):
     policy_applied: dict    # Copia de PolicyInstruments usados este turno
     events_triggered: list  # Eventos exógenos/endógenos ocurridos
     FX_intervention: float  # Intervención cambiaria del Banco Central (Fase 4.1)
+    capital_flows_eq: float # Flujos netos de capital calculados ex-post
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -190,6 +192,7 @@ class GameState(TypedDict):
 
     # Estado continuo
     Y_pot:             float
+    Y_pot_base:        float
     P_local:           float
     P_NT:              float
     pi_e:              float
@@ -203,12 +206,14 @@ class GameState(TypedDict):
     # Historial
     history:           list   # list[TurnSnapshot]
     active_events:     list   # list[str]
+    event_durations:   dict[str, int]
     news_feed:         list   # list[NewsItem]
     advisor_warnings:  list   # list[str]
 
     # Scoring
     scores:            list   # list[int]
     delta_score:       float | None
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -232,6 +237,7 @@ def make_empty_game_state() -> GameState:
         "structural":       {},
         "policy":           {},
         "Y_pot":            100.0,
+        "Y_pot_base":       100.0,
         "P_local":          1.0,
         "P_NT":             1.0,
         "pi_e":             0.03,
@@ -241,6 +247,7 @@ def make_empty_game_state() -> GameState:
         "B":                0.0,
         "history":          [],
         "active_events":    [],
+        "event_durations":   {},
         "news_feed":        [],
         "advisor_warnings": [],
         "scores":           [],

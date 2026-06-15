@@ -26,10 +26,10 @@ import math
 # ─────────────────────────────────────────────────────────────────────────────
 
 GAME_OVER_THRESHOLDS: dict[str, float] = {
-    "gY_min":      -0.15,   # Contracción > 15% → Depresión económica
+    "gY_min":      -0.20,   # Contracción > 20% → Depresión económica
     "U_max":        0.35,   # Desempleo > 35% → Colapso social
     "pi_max":       1.50,   # Inflación > 150% → Hiperinflación
-    "B_Y_ratio_max": 1.50,  # Deuda/PIB > 150% → Default soberano
+    "B_Y_ratio_max": 2.00,  # Deuda/PIB > 200% → Default soberano
 }
 
 # Nota: R <= 0 bajo TC Fijo → Circuit Breaker (NO es game_over inmediato)
@@ -157,56 +157,65 @@ def calc_period_score_v2(
     gap: float,
     U: float,
     pi: float,
-    deficit_pct: float,
-    R: float,
-    R_0: float,
-) -> int:
+    gY: float = 0.0,          # <-- NUEVO: Tasa de crecimiento (Y_t - Y_t-1)/Y_t-1
+    deficit_pct: float = 0.0, # Mantener por retrocompatibilidad, no usar en cálculo
+    R: float = 50.0,          # Mantener por retrocompatibilidad, no usar en cálculo
+    R_0: float = 50.0,        # Mantener por retrocompatibilidad, no usar en cálculo
+    scenario_id: str = "unknown",
+    current_turn: int = 0,
+    has_real_fiscal_surplus: bool = False,
+    prev_score: Optional[float] = None,
+) -> float:
     """
-    Puntaje del período: 0–100 puntos, suma de 5 dimensiones.
-
-    Dimensiones y pesos:
-    ┌────────────────┬──────┬───────────────────┬──────────────────┐
-    │ Dimensión      │ Peso │ Óptimo            │ Aceptable        │
-    ├────────────────┼──────┼───────────────────┼──────────────────┤
-    │ Output Gap     │  25  │ gap ∈ [-1%, +3%]  │ gap ∈ [-3%, +5%]│
-    │ Desempleo U    │  25  │ U < 5%            │ U < 8%           │
-    │ Inflación π    │  25  │ π ∈ [1%, 4%]      │ π ∈ [0%, 6%]    │
-    │ Déficit/PIB    │  15  │ déficit < 3%      │ déficit < 6%     │
-    │ Reservas R/R₀  │  10  │ R > 80% R₀       │ R > 50% R₀       │
-    └────────────────┴──────┴───────────────────┴──────────────────┘
-
-    Parameters
-    ----------
-    gap        : Brecha del producto = (Y - Y_pot) / Y_pot
-    U          : Tasa de desempleo
-    pi         : Inflación del período
-    deficit_pct: Déficit fiscal como fracción del PIB
-    R          : Reservas internacionales del período
-    R_0        : Reservas iniciales (referencia en t=0)
-
-    Returns
-    -------
-    int : Score del período (0–100)
+    Calcula la PERCEPCIÓN PÚBLICA (Aprobación Ciudadana) de 0 a 100.
+    Diseño "Suavizado": Se enfoca solo en lo que el votante siente.
+    Permite recuperaciones y no castiga variables tecnocráticas directamente.
     """
-    score = 0
+    # 1. SCORE DE DESEMPLEO (Peso 40%)
+    # Ideal: <= 4% (100 pts). V3.5: Tolerancia de 2% (hasta 6% sin penalidad) y degradación más suave (1000 en vez de 1250)
+    diff_U = max(0.0, U - 0.04)
+    if diff_U < 0.02:
+        penalty_U = 0.0
+    else:
+        penalty_U = (diff_U - 0.02) * 1000.0
+    
+    # 2. SCORE DE INFLACIÓN (Peso 40%)
+    # V3.6: Asimetría con zona de no-castigo hasta -2% para deflación
+    desviacion_pi = pi - 0.03
+    if desviacion_pi < 0:
+        # Deflación: penalidad reducida y con zona de no-castigo hasta -2%
+        penalty_pi = max(0.0, abs(desviacion_pi) - 0.04) * 80.0
+    else:
+        # Inflación/Hiperinflación: penalidad estricta e inalterada
+        penalty_pi = desviacion_pi * 333.0
 
-    # 1. Output Gap (25 pts): óptimo [-0.01, 0.03], aceptable [-0.03, 0.05]
-    score += _score_bounded(gap, -0.01, 0.03, -0.03, 0.05, 25)
+    # Paso B: Vincular la Responsabilidad Fiscal al Score
+    if has_real_fiscal_surplus:
+        penalty_U *= 0.5
 
-    # 2. Desempleo (25 pts): óptimo [0, 0.05], aceptable [0, 0.08]
-    score += _score_bounded(U, 0.0, 0.05, 0.0, 0.08, 25)
+    # Paso A: Ventana de Gracia en turnos 1, 2 y 3 para crisis profundas
+    if scenario_id in ["latam_crisis", "death_spiral"] and 1 <= current_turn <= 3:
+        penalty_U *= 0.5
+        penalty_pi *= 0.5
 
-    # 3. Inflación (25 pts): óptimo [0.01, 0.04], aceptable [0.0, 0.06]
-    score += _score_bounded(pi, 0.01, 0.04, 0.0, 0.06, 25)
-
-    # 4. Déficit/PIB (15 pts): menor es mejor
-    score += _score_upper_bounded(deficit_pct, 0.03, 0.06, 15)
-
-    # 5. Reservas relativas (10 pts): mayor es mejor
-    R_ratio = R / max(R_0, 1.0)
-    score += _score_lower_bounded(R_ratio, 0.80, 0.50, 10)
-
-    return min(100, max(0, score))
+    score_U = max(0.0, 100.0 - penalty_U)
+    score_pi = max(0.0, 100.0 - penalty_pi)
+    
+    # 3. SCORE DE CRECIMIENTO (Peso 20%)
+    # Base 50 pts (neutral). Sube con crecimiento, baja con recesión.
+    # 0% = 50 pts, 5% = 100 pts, -5% = 0 pts
+    score_gY = max(0.0, min(100.0, 50.0 + (gY * 1000)))
+    
+    # Ponderación final (score del turno presente)
+    score_present = (score_U * 0.40) + (score_pi * 0.40) + (score_gY * 0.20)
+    
+    # Paso C: Suavizado por Media Móvil (60% actual, 40% anterior)
+    if prev_score is not None:
+        percepcion_publica = 0.60 * score_present + 0.40 * prev_score
+    else:
+        percepcion_publica = score_present
+        
+    return round(percepcion_publica, 2)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -221,6 +230,7 @@ def check_game_over(
     regime: str,
     B:     float,
     Y:     float,
+    history: list = None,
 ) -> tuple[bool, str | None]:
     """
     Verifica si se cruza algún umbral de Game Over.
@@ -254,19 +264,28 @@ def check_game_over(
         (game_over, reason) donde reason es None si no hay game over.
     """
     thr = GAME_OVER_THRESHOLDS
+    gY_min = thr["gY_min"]
+    U_max = thr["U_max"]
+
+    # Evaluar medias móviles de los últimos dos períodos para evitar game overs por rebotes contables transitorios
+    gY_smoothed = gY
+    U_smoothed = U
+    if history and len(history) >= 2:
+        gY_smoothed = 0.5 * gY + 0.5 * history[-2].get("gY", gY)
+        U_smoothed = 0.5 * U + 0.5 * history[-2].get("U", U)
 
     # 1. Depresión económica
-    if gY < thr["gY_min"]:
+    if gY_smoothed < gY_min:
         return True, (
-            f"💀 DEPRESIÓN ECONÓMICA: La economía se contrajo {abs(gY):.1%} en un "
-            "solo período (umbral: −15%). La actividad colapsó."
+            f"💀 DEPRESIÓN ECONÓMICA: La economía se contrajo {abs(gY_smoothed):.1%} en un "
+            f"solo período (umbral: {gY_min:.1%}). La actividad colapsó."
         )
 
     # 2. Colapso social
-    if U > thr["U_max"]:
+    if U_smoothed > U_max:
         return True, (
-            f"🔥 COLAPSO SOCIAL: El desempleo alcanzó {U:.1%} "
-            f"(umbral: {thr['U_max']:.0%}). Estallido social inevitable."
+            f"🔥 COLAPSO SOCIAL: El desempleo alcanzó {U_smoothed:.1%} "
+            f"(umbral: {U_max:.0%}). Estallido social inevitable."
         )
 
     # 3. Hiperinflación
@@ -348,32 +367,59 @@ def get_dimension_scores(
     gap: float,
     U: float,
     pi: float,
-    deficit_pct: float,
-    R: float,
-    R_0: float,
+    deficit_pct: float = 0.0,
+    R: float = 50.0,
+    R_0: float = 50.0,
+    gY: float = 0.0,  # V3.1: crecimiento real
+    scenario_id: str = "unknown",
+    current_turn: int = 0,
+    has_real_fiscal_surplus: bool = False,
 ) -> dict[str, int]:
     """
     Retorna el desglose del score por dimensión.
-    Útil para el panel de diagnóstico de la UI.
+    Unificado con calc_period_score_v2 (Opción B: Empleo 40%, Precios 40%, Crecimiento 20%).
 
     Returns
     -------
-    dict con claves: 'gap', 'U', 'pi', 'deficit', 'reservas', 'total'
+    dict con claves: 'U', 'pi', 'gY', 'total'
     """
-    s_gap    = _score_bounded(gap, -0.01, 0.03, -0.03, 0.05, 25)
-    s_U      = _score_bounded(U, 0.0, 0.05, 0.0, 0.08, 25)
-    s_pi     = _score_bounded(pi, 0.01, 0.04, 0.0, 0.06, 25)
-    s_def    = _score_upper_bounded(deficit_pct, 0.03, 0.06, 15)
-    R_ratio  = R / max(R_0, 1.0)
-    s_res    = _score_lower_bounded(R_ratio, 0.80, 0.50, 10)
+    # 1. SCORE DE DESEMPLEO (Peso 40%)
+    diff_U = max(0.0, U - 0.04)
+    if diff_U < 0.02:
+        penalty_U = 0.0
+    else:
+        # V3.5: degradación 1000.0
+        penalty_U = (diff_U - 0.02) * 1000.0
 
-    total = min(100, s_gap + s_U + s_pi + s_def + s_res)
+    # 2. SCORE DE INFLACIÓN (Peso 40%)
+    desviacion_pi = pi - 0.03
+    if desviacion_pi < 0:
+        penalty_pi = max(0.0, abs(desviacion_pi) - 0.04) * 80.0
+    else:
+        # V3.6: penalidad 333.0
+        penalty_pi = desviacion_pi * 333.0
+
+    # Paso B: Vincular la Responsabilidad Fiscal al Score
+    if has_real_fiscal_surplus:
+        penalty_U *= 0.5
+
+    # Paso A: Ventana de Gracia en turnos 1, 2 y 3 para crisis profundas
+    if scenario_id in ["latam_crisis", "death_spiral"] and 1 <= current_turn <= 3:
+        penalty_U *= 0.5
+        penalty_pi *= 0.5
+
+    s_U = int(round(max(0.0, 100.0 - penalty_U) * 0.40))
+    s_pi = int(round(max(0.0, 100.0 - penalty_pi) * 0.40))
+    s_gY = int(round(max(0.0, min(100.0, 50.0 + (gY * 1000))) * 0.20))
+
+    total = min(100, s_U + s_pi + s_gY)
 
     return {
-        "gap":      s_gap,
-        "U":        s_U,
-        "pi":       s_pi,
-        "deficit":  s_def,
-        "reservas": s_res,
-        "total":    total,
+        "gap": 0,       # Legacy placeholder
+        "deficit": 0,   # Legacy placeholder
+        "reservas": 0,  # Legacy placeholder
+        "U": s_U,
+        "pi": s_pi,
+        "gY": s_gY,
+        "total": total,
     }

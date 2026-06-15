@@ -137,10 +137,10 @@ def test_charts_v2_compilation():
     # 3. Termómetro de reservas
     fig_res = plot_reserves_thermometer(30.0, 50.0)
     assert isinstance(fig_res, go.Figure)
-    assert fig_res.data[0].gauge.bar.color == "#f59e0b", "Debe ser amarillo si R es menor al 70%"
+    assert fig_res.data[0].gauge.bar.color == "#fb8b1e", "Debe ser amarillo si R es menor al 70%"
     
     fig_res_red = plot_reserves_thermometer(10.0, 50.0)
-    assert fig_res_red.data[0].gauge.bar.color == "#ef4444", "Debe ser rojo crítico si R < 30%"
+    assert fig_res_red.data[0].gauge.bar.color == "#ff433d", "Debe ser rojo crítico si R < 30%"
 
     # 4. Bola de nieve de deuda
     fig_deuda = plot_debt_snowball(history)
@@ -211,9 +211,11 @@ def test_narrative_feedback():
         "B": 150.0, # Deuda muy abultada
         "R": 50.0, "pi": 0.02, "pi_e": 0.03, "U": 0.05,
         "gap": 0.0, "gY": 0.0, "q_real": 1.0, "A_domestic": 100.0, "P_local": 1.0,
+        "score": 80,
     }
     snap_0 = dict(snap_f_debt)
     snap_0["B"] = 50.0
+    snap_0["score"] = 80
     
     # Bajo alta deuda, debe detonarse advertencia de "Bola de nieve" en la narrativa
     narrative_debt = get_custom_narrative(summary_reelected, snap_f_debt, snap_0)

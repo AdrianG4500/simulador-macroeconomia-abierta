@@ -31,3 +31,10 @@ reports/
 .vscode/
 .idea/
 *.swp
+
+# Temporary scratch files and recovery dumps
+scratch/
+recovered_lines*.txt
+before_fix.txt
+step_forward*.txt
+

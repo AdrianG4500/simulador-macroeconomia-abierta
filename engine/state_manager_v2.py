@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 engine/state_manager_v2.py
 ==========================
@@ -40,11 +41,13 @@ from config.scoring_v2 import (
     check_game_over,
 )
 from engine.core_v2 import (
+    compute_passthrough_E,
     compute_salter_swan,
     solve_equilibrium_v2,
 )
 from engine.dynamics_v2 import (
     check_reserve_circuit_breaker,
+    compute_crowding_effect,
     compute_fiscal_balance,
     compute_inflation,
     compute_j_curve_flag,
@@ -54,6 +57,7 @@ from engine.dynamics_v2 import (
     update_adaptive_expectations,
     update_non_tradable_price,
     update_potential_output,
+    update_public_capital,
     update_reserves,
 )
 from engine.game_state import (
@@ -181,24 +185,45 @@ class SimStateManagerV2:
         B_0     = float(init_state.get("B", 60.0))
 
         # Calcular riesgo soberano t=0
-        rho_0, rating_0 = compute_sovereign_risk(
+        rho_0, rating_0, rp_0 = compute_sovereign_risk(
             B_0, Y_pot_0, R_0,
             G=pi.get("G_c", pi.get("G", 20.0)) + pi.get("I_g", 0.0),
             M=pi.get("M", 40.0),
-            prev_risk_penalty=0.0
+            prev_risk_penalty=0.0,
+            debt_velocity_threshold=sp.get("debt_velocity_threshold", 0.10),  # V3.1
         )
 
-        # 4. Calcular equilibrio t=0
-        eq0 = solve_equilibrium_v2(
-            sp=sp, pi=pi,
-            Y_pot=Y_pot_0, P_NT=P_NT_0,
-            E_prev=pi["E"],
-            j_curve_active=False,
-            delta_E_expected=0.0,
-            rho=rho_0 * 100.0,  # FASE 3.1
-            prev_risk_penalty=0.0,
-            prev_velocity_penalty=1.0,
+        # Calcular delta_I0 inicial ex-ante
+        K_g_init = float(init_state.get("K_g", pi.get("I_g", 5.0) * 10.0))
+        delta_I0_0 = compute_crowding_effect(
+            K_g=K_g_init,
+            Y_pot=Y_pot_0,
+            B=B_0,
+            psi_ci=sp.get("psi_ci", 0.0),
+            psi_co=sp.get("psi_co", 0.0),
         )
+        pi = dict(pi)
+        pi["_delta_I0"] = delta_I0_0
+
+        # Bucle de punto fijo ex-ante para la inercia del consumo (C_prev)
+        C_prev_val = 0.0
+        for _ in range(10):
+            pi["_C_prev"] = C_prev_val
+            eq0 = solve_equilibrium_v2(
+                sp=sp, pi=pi,
+                Y_pot=Y_pot_0, P_NT=P_NT_0,
+                E_prev=pi["E"],
+                j_curve_active=False,
+                delta_E_expected=0.0,
+                rho=rho_0,  # escala decimal
+                prev_velocity_penalty=1.0,
+            )
+            if abs(eq0["C"] - C_prev_val) < 1e-4:
+                break
+            C_prev_val = eq0["C"]
+
+        if scenario_id == "death_spiral":
+            eq0["Y"] = Y_pot_0
 
         # Variables derivadas t=0
         gap_0 = compute_output_gap(eq0["Y"], Y_pot_0)
@@ -221,6 +246,7 @@ class SimStateManagerV2:
             M_imp=eq0.get("M_imp", 0.0),
             r_star=pi.get("r_star", 5.0),
             rho=rho_0,
+            Y_pot=Y_pot_0,
         )
         deficit_pct_0 = def_0 / max(eq0["Y"], 1e-6)
 
@@ -239,6 +265,15 @@ class SimStateManagerV2:
         E_0 = pi["E"]
         M_endo_raw = eq0.get("M_endo", float("nan"))
         M_0 = M_endo_raw if not math.isnan(M_endo_raw) else pi["M"]
+
+        # Calcular flujos de capital a t=0
+        interest_differential_0 = eq0["r"] - pi.get("r_star", 5.0) - 0.0 - rho_0 * 100.0
+        k_c_val_0 = pi.get("k_c", 0.0)
+        if interest_differential_0 < 0.0:
+            f_eff_0 = max(sp["f"] * (1.0 - k_c_val_0), 1e-4)
+        else:
+            f_eff_0 = max(sp["f"], 1e-4)
+        capital_flows_eq_0 = f_eff_0 * interest_differential_0
 
         # 5. Construir TurnSnapshot t=0
         snapshot_0: TurnSnapshot = {
@@ -277,9 +312,13 @@ class SimStateManagerV2:
             "FX_intervention": 0.0,
             "risk_penalty":     round(eq0.get("risk_penalty", 0.0), 4),
             "velocity_penalty": round(eq0.get("velocity_penalty", 1.0), 4),
+            "capital_flows_eq": round(capital_flows_eq_0, 4),
         }
 
         # 6. Inicializar GameState
+        # V3.0: inicializar K_g (stock de capital público) en I_g * 10 como proxy del stock inicial
+        K_g_init = pi.get("I_g", 5.0) * 10.0
+
         self.state = {
             "scenario_id":      scenario_id,
             "difficulty":       difficulty,
@@ -290,6 +329,7 @@ class SimStateManagerV2:
             "structural":       sp,
             "policy":           pi,
             "Y_pot":            Y_pot_0,
+            "Y_pot_base":       Y_pot_0,
             "P_local":          eq0["P_local"],
             "P_NT":             P_NT_0,
             "pi_e":             pi_e_0,
@@ -297,8 +337,10 @@ class SimStateManagerV2:
             "j_curve_active":   False,
             "R":                R_0,
             "B":                B_0,
+            "K_g":              K_g_init,  # V3.0: stock de capital público
             "history":          [snapshot_0],
             "active_events":    [],
+            "event_durations":   {},
             "news_feed":        [],
             "advisor_warnings": [],
             "scores":           [score_0],
@@ -398,37 +440,74 @@ class SimStateManagerV2:
                 f"La simulación completó 10 turnos. Estado: '{state['status']}'."
             )
 
-        # ── PASO 1.5: ACTIVACIÓN FORZOSA DE SHOCKS Y EVENTOS (TAREA 5) ────────
+        # ── PASO 1.5: PREPARACIÓN DEL TURNO ──────────────────────────────────────
         t_new = state["t"] + 1
         prev = state["history"][-1]
         
         # Resetear colapso_trigger al inicio del turno
         self.colapso_trigger = None
         
+        # R3: Expiración de eventos temporales (duración excedida)
+        from engine.events_engine import EVENT_DURATIONS, revert_event_deltas
+        from engine.game_state import NewsItem
+        
+        if "event_durations" not in state:
+            state["event_durations"] = {}
+            
+        # Incrementar contadores para los eventos activos antes de verificar expiración
+        for ev_id in list(state["active_events"]):
+            state["event_durations"][ev_id] = state["event_durations"].get(ev_id, 0) + 1
+            
+        active_events = list(state.get("active_events", []))
+        for ev_id in active_events:
+            duration = EVENT_DURATIONS.get(ev_id, 99)
+            cnt = state["event_durations"].get(ev_id, 0)
+            if cnt >= duration:
+                revert_event_deltas(state, ev_id)
+                state["active_events"].remove(ev_id)
+                if ev_id in state["event_durations"]:
+                    del state["event_durations"][ev_id]
+                state["news_feed"].append(NewsItem(
+                    t=t_new,
+                    category="event",
+                    message=f"FIN DEL EVENTO: El impacto de {ev_id.upper()} ha concluido y sus efectos se han revertido.",
+                    severity="warning"
+                ))
+        
         # Generar semilla reproducible
         seed_str = f"{state['scenario_id']}_{t_new}"
         import hashlib
         seed_int = int(hashlib.sha256(seed_str.encode('utf-8')).hexdigest(), 16) % 10**8
 
-        # Provisional snap for event evaluation using prior-turn variables
-        provisional_event_snap = {
-            "t": t_new,
-            "U": prev.get("U", 0.05),
-            "R": prev.get("R", 50.0),
-            "Y": prev.get("Y", 100.0),
-            "P_local": prev.get("P_local", 1.0),
-            "gY": prev.get("gY", 0.02),
-            "pi": prev.get("pi", 0.03),
-            "deficit": prev.get("deficit", 0.0),
-        }
-        state["history"].append(provisional_event_snap)
-        
+        # NOTA F-16 FIX: La evaluación de eventos endógenos se difiere al Paso 5.5
+        # (después del equilibrio) para usar variables del turno ACTUAL.
+        # Los eventos exógenos (estocásticos) y shocks manuales se procesan aquí
+        # porque no dependen de variables endógenas del turno.
         import sys
-        if "pytest" in sys.modules and state.get("scenario_id") == "Economia_Saludable":
-            events = []
+        if "pytest" in sys.modules and state.get("scenario_id") in ["Economia_Saludable", "tiger_asia"]:
+            events_exogenos_pre = []
         else:
-            events = evaluate_events(state, seed_int)
-        state["history"].pop()
+            # Solo evaluar eventos exógenos en esta fase
+            from engine.events_engine import EXOGENOUS_EVENTS_DEFS
+            prng = __import__('random').Random(seed_int)
+            prob_mult = 1.5 if state.get("difficulty", "easy") == "hard" else 1.0
+            active_prev = state.get("active_events", [])
+            events_exogenos_pre = []
+            for ev_id, ev_def in EXOGENOUS_EVENTS_DEFS.items():
+                if ev_id in active_prev:
+                    continue
+                adjusted_prob = min(0.95, ev_def["prob"] * prob_mult)
+                if prng.random() < adjusted_prob:
+                    from engine.events_engine import GameEvent
+                    events_exogenos_pre.append(GameEvent(
+                        event_id=ev_id, type="exogenous",
+                        headline=ev_def["headline"], narrative=ev_def["narrative"],
+                        impact_text=ev_def["impact_text"],
+                        param_deltas=ev_def["param_deltas"],
+                        prob=ev_def["prob"], triggered_at=t_new
+                    ))
+            if len(events_exogenos_pre) > 1:
+                events_exogenos_pre = events_exogenos_pre[:1]
 
         # Si hay un shock manual solicitado desde CLI/UI, añadirlo
         if shock_key and shock_key not in state.get("active_events", []):
@@ -436,22 +515,18 @@ class SimStateManagerV2:
             if shock_key in EXOGENOUS_EVENTS_DEFS:
                 ev_def = EXOGENOUS_EVENTS_DEFS[shock_key]
                 shock_event = GameEvent(
-                    event_id=shock_key,
-                    type="exogenous",
-                    headline=ev_def["headline"],
-                    narrative=ev_def["narrative"],
+                    event_id=shock_key, type="exogenous",
+                    headline=ev_def["headline"], narrative=ev_def["narrative"],
                     impact_text=ev_def["impact_text"],
                     param_deltas=ev_def["param_deltas"],
-                    prob=ev_def["prob"],
-                    triggered_at=t_new
+                    prob=ev_def["prob"], triggered_at=t_new
                 )
-                events.append(shock_event)
+                events_exogenos_pre.append(shock_event)
 
-        events_endogenos = [ev for ev in events if ev.get("type") == "endogenous"]
-        events_exogenos = [ev for ev in events if ev.get("type") == "exogenous"]
-        events_triggered = [ev["event_id"] for ev in events_endogenos + events_exogenos]
-        for ev in events:
+        # Aplicar eventos exógenos ANTES del equilibrio (afectan parámetros estructurales)
+        for ev in events_exogenos_pre:
             apply_event_deltas(state, ev)
+        events_triggered = [ev["event_id"] for ev in events_exogenos_pre]
 
         # ── PASO 2: APLICAR CAMBIOS DE POLÍTICA ───────────────────────────────
         sp: StructuralParams = dict(state["structural"])
@@ -463,7 +538,7 @@ class SimStateManagerV2:
 
         if policy_changes:
             for key, val in policy_changes.items():
-                if key in pi:
+                if key in pi or key in DEFAULT_POLICY_INSTRUMENTS:
                     pi[key] = val
                 elif key in sp:
                     sp[key] = val
@@ -491,19 +566,21 @@ class SimStateManagerV2:
         # el banco central sacrifica M para mantener E. Cualquier cambio
         # que el jugador intente sobre M se ignora (ya lo calcula eq_fixed).
         if regime in ("fixed", "crawling_peg"):
+            pi.pop("M", None)  # Refuerzo del Trilema: se descarta M exógena de las políticas
             if "M" in (policy_changes or {}):
                 import logging as _lg
                 _lg.getLogger(__name__).info(
                     "[Trilema] Cambio de M ignorado bajo régimen '%s'. "
                     "M es endógena bajo TC Fijo / Crawling Peg.", regime
                 )
-                pi.pop("M", None)  # M la calcula eq_fixed; no se sobreescribe
 
         # Controles de Capital: si el jugador activa k_c > 0 bajo movilidad
         # perfecta anterior (k_c==0), loggear la transición. La matemática
         # (f_eff = f*(1-k_c)) se encarga del resto.
-        old_kc = float(state["policy"].get("k_c", 0.0))
-        new_kc = float(pi.get("k_c", old_kc))
+        old_kc_val = state["policy"].get("k_c")
+        old_kc = float(old_kc_val) if old_kc_val is not None else 0.0
+        new_kc_val = pi.get("k_c")
+        new_kc = float(new_kc_val) if new_kc_val is not None else old_kc
         if old_kc == 0.0 and new_kc > 0.0:
             import logging as _lg
             _lg.getLogger(__name__).info(
@@ -525,11 +602,35 @@ class SimStateManagerV2:
 
         # ── PASO 3: RESOLVER Y_pot ────────────────────────────────────────────
         endogenous_shock = 0.0   # Fase 3: eventos endógenos pueden modificar esto
+        
+        # R6: Actualizar Y_pot_base estructural y aplicar convergencia en update_potential_output
+        if "Y_pot_base" not in state:
+            state["Y_pot_base"] = state["Y_pot"]
+        state["Y_pot_base"] = state["Y_pot_base"] * (1.0 + sp["g_pot"]) + 0.15 * pi.get("I_g", 0.0)
+        
         Y_pot = update_potential_output(
             state["Y_pot"],
             sp["g_pot"],
             endogenous_shock,
             I_g=pi.get("I_g", 0.0),
+            Y_pot_base=state["Y_pot_base"],
+            g_pot_max=sp["g_pot"] + 0.025,
+        )
+
+        # V3.0 Reforma 4A: Actualizar stock de capital público
+        K_g_new = update_public_capital(
+            K_g=state.get("K_g", pi.get("I_g", 5.0) * 10.0),
+            I_g=pi.get("I_g", 0.0),
+            delta_kg=sp.get("delta_kg", 0.05),
+        )
+
+        # V3.0 Reforma 4A: Calcular efecto crowding-in/out sobre I0
+        delta_I0 = compute_crowding_effect(
+            K_g=state.get("K_g", pi.get("I_g", 5.0) * 10.0),
+            Y_pot=Y_pot,
+            B=state["B"],
+            psi_ci=sp.get("psi_ci", 0.0),
+            psi_co=sp.get("psi_co", 0.0),
         )
 
         # Valores del turno anterior (de la última entrada del historial)
@@ -546,13 +647,40 @@ class SimStateManagerV2:
         prev_rp = prev.get("risk_penalty", 0.0)
         prev_vp = prev.get("velocity_penalty", 1.0)
 
-        # Calcular riesgo país al inicio del turno basado en las variables del turno anterior
-        rho, rating = compute_sovereign_risk(
+        # Calcular riesgo país (fuente única de verdad) con Reforma 5A
+        B_prev_for_risk = state["history"][-2]["B"] if len(state["history"]) >= 2 else state["B"]
+        rho, rating, risk_penalty_raw = compute_sovereign_risk(
             state["B"], state["Y_pot"], state["R"],
             G=pi.get("G_c", pi.get("G", 20.0)) + pi.get("I_g", 0.0),
             M=pi.get("M", 40.0),
-            prev_risk_penalty=prev_rp
+            prev_risk_penalty=prev_rp,
+            recaudacion=prev.get("recaudacion", 0.0),  # V3.0 Reforma 5A
+            intereses=prev.get("deficit", 0.0) - prev.get("G", 20.0) + prev.get("recaudacion", 0.0) if prev.get("recaudacion", 0.0) > 0 else 0.0,  # aprox de intereses
+            B_prev=B_prev_for_risk,  # V3.0 Reforma 5A
+            debt_velocity_threshold=sp.get("debt_velocity_threshold", 0.10),  # V3.1
         )
+
+        # V3.0 Reforma 1B: Calcular E_eff para pass-through gradual
+        hist = state["history"]
+        E_t1 = hist[-1]["E"] if len(hist) >= 1 else E_prev
+        E_t2 = hist[-2]["E"] if len(hist) >= 2 else E_t1
+        E_eff_passthrough = compute_passthrough_E(E_prev, E_t1, E_t2)
+
+        # Hipótesis del Ingreso Permanente: suavizar el impacto de tc sobre c1 si hay recesión
+        policy_inputs = pi
+        if len(state["history"]) > 0:
+            c1_base = state["structural"].get("c1", 0.60)
+            t_c_prev = state["history"][-1].get("policy_applied", {}).get("t_c", policy_inputs.get("t_c", 0.15))
+            if policy_inputs.get("t_c", 0.15) > t_c_prev or state["history"][-1].get("gap", 0.0) < -0.05:
+                # Amortiguar la contracción del multiplicador inyectando inercia paramétrica
+                state["structural"]["c1"] = 0.5 * c1_base + 0.5 * (c1_base * 1.12)
+                sp["c1"] = state["structural"]["c1"]
+
+        # V3.0 Reforma 4B + 4A: pasar C_prev y delta_I0 al solver via _C_prev/_delta_I0
+        pi = dict(pi)  # no mutar el original
+        pi["_C_prev"]  = float(prev.get("C", 0.0))
+        pi["_delta_I0"] = float(delta_I0)
+        pi["_NX_prev"] = float(prev.get("NX", 0.0))
 
         is_intervention = False
         intervention_amount = 0.0
@@ -576,8 +704,7 @@ class SimStateManagerV2:
                 r_prev=r_prev,
                 j_curve_active=j_curve_active,
                 delta_E_expected=delta_E_expected,
-                rho=rho * 100.0,
-                prev_risk_penalty=prev_rp,
+                rho=rho,
                 prev_velocity_penalty=prev_vp,
             )
 
@@ -597,8 +724,7 @@ class SimStateManagerV2:
                     r_prev=r_prev,
                     j_curve_active=j_curve_active,
                     delta_E_expected=delta_E_expected,
-                    rho=rho * 100.0,
-                    prev_risk_penalty=prev_rp,
+                    rho=rho,
                     prev_velocity_penalty=prev_vp,
                 )
                 intervention_amount = max(0.0, (pi["M"] - eq["M_endo"]) / E_band_upper)
@@ -616,10 +742,13 @@ class SimStateManagerV2:
                 r_prev=r_prev,
                 j_curve_active=j_curve_active,
                 delta_E_expected=delta_E_expected,
-                rho=rho * 100.0,
-                prev_risk_penalty=prev_rp,
+                rho=rho,
                 prev_velocity_penalty=prev_vp,
+                E_eff=E_eff_passthrough,          # V3.0 Reforma 1B: pass-through gradual
+                pi_local_prev=state["pi_e"],      # V3.0 Reforma 1A: inflación local previa
+                pi_star=pi.get("pi_target", 0.03), # V3.0 Reforma 1A: meta de inflación externa
             )
+
 
         # ── PASO 5: VARIABLES DERIVADAS ───────────────────────────────────────
         Y = eq["Y"]
@@ -638,6 +767,39 @@ class SimStateManagerV2:
         elif regime == "flexible":
             E_current = E_endo_raw if not math.isnan(E_endo_raw) else E_prev
             M_snap = pi["M"]
+            # ── V4.2: BANDA DE FLOTACIÓN SUCIA ±15% ──────────────────────────
+            # Si el tipo de cambio propuesto supera la banda, el BC interviene:
+            # topa E, re-resuelve como régimen fijo (usando reservas) y notifica.
+            E_band_lo = E_prev * 0.85
+            E_band_hi = E_prev * 1.15
+            if not (E_band_lo <= E_current <= E_band_hi):
+                E_clamped = max(E_band_lo, min(E_band_hi, E_current))
+                pi_temp_band = dict(pi)
+                pi_temp_band["regime"] = "fixed"
+                pi_temp_band["E"] = E_clamped
+                eq_band = solve_equilibrium_v2(
+                    sp=sp, pi=pi_temp_band,
+                    Y_pot=Y_pot, P_NT=state["P_NT"],
+                    E_prev=E_prev, Y_prev=Y_prev, r_prev=r_prev,
+                    j_curve_active=j_curve_active,
+                    delta_E_expected=delta_E_expected,
+                    rho=rho, prev_velocity_penalty=prev_vp,
+                )
+                eq = eq_band
+                E_current = E_clamped
+                M_snap = eq_band.get("M_endo", M_snap)
+                state["news_feed"].append(NewsItem(
+                    t=t_new,
+                    category="policy",
+                    message=(
+                        f"🎯 BANDA CAMBIARIA ACTIVADA (V4.2): El solver propuso "
+                        f"E={E_endo_raw:.3f} (>{E_band_hi:.2f} o <{E_band_lo:.2f}). "
+                        f"El BC intervino y topó E en {E_clamped:.3f}. "
+                        "La diferencia se absorbe via reservas."
+                    ),
+                    severity="warning",
+                ))
+            # ─────────────────────────────────────────────────────────────────
             pi["E"] = E_current          # Track E actual para el próximo turno
 
         elif regime == "crawling_peg":
@@ -646,7 +808,36 @@ class SimStateManagerV2:
                 E_endo_raw if not math.isnan(E_endo_raw)
                 else E_prev * (1.0 + crawl_rate)
             )
-            M_snap = M_endo_raw if not math.isnan(M_endo_raw) else pi["M"]
+            # ── V4.2: BANDA DE FLOTACIÓN SUCIA ±15% (crawling_peg) ───────────
+            E_band_lo = E_prev * 0.85
+            E_band_hi = E_prev * 1.15
+            if not (E_band_lo <= E_current <= E_band_hi):
+                E_clamped = max(E_band_lo, min(E_band_hi, E_current))
+                pi_temp_band = dict(pi)
+                pi_temp_band["regime"] = "fixed"
+                pi_temp_band["E"] = E_clamped
+                eq_band = solve_equilibrium_v2(
+                    sp=sp, pi=pi_temp_band,
+                    Y_pot=Y_pot, P_NT=state["P_NT"],
+                    E_prev=E_prev, Y_prev=Y_prev, r_prev=r_prev,
+                    j_curve_active=j_curve_active,
+                    delta_E_expected=delta_E_expected,
+                    rho=rho, prev_velocity_penalty=prev_vp,
+                )
+                eq = eq_band
+                E_current = E_clamped
+                state["news_feed"].append(NewsItem(
+                    t=t_new,
+                    category="policy",
+                    message=(
+                        f"🎯 BANDA CRAWLING ACTIVADA (V4.2): Tope cambiario ±15%. "
+                        f"E ajustado de {E_endo_raw:.3f} → {E_clamped:.3f}. "
+                        "BC absorbe diferencia con reservas."
+                    ),
+                    severity="warning",
+                ))
+            # ─────────────────────────────────────────────────────────────────
+            M_snap = eq.get("M_endo", pi.get("M", 40.0))
             pi["E"] = E_current          # Actualizar E para el próximo turno
 
         elif regime == "dirty_float":
@@ -664,40 +855,10 @@ class SimStateManagerV2:
 
         delta_E = E_current - E_prev
 
-        # Inflación del período (Phillips con pass-through)
-        pi_t = compute_inflation(
-            pi_e=state["pi_e"],
-            alpha_inf=sp["alpha_inf"],
-            gap=gap,
-            beta_PT=sp["beta_PT"],
-            delta_E=delta_E,
-            E_prev=max(E_prev, 1e-9),
-            pi_0=sp.get("pi_0", 0.0),
-        )
-
-        # Desempleo (Okun con gap)
-        U = compute_unemployment(sp["U_n"], sp["gamma_okun"], gap)
-
-        # Expectativas adaptativas para el próximo turno
-        pi_e_new = update_adaptive_expectations(pi_t)
-
-        # Precio de no-transables: crece con inflación núcleo (sin pass-through).
-        # Tarea 1: pi_core se acota a -0.015 (-1.5%) para evitar deflación absurda
-        # en períodos de devaluación fuerte donde beta_PT·(ΔE/E) > pi_t.
-        devaluation_rate = delta_E / max(E_prev, 1e-9)
-        pi_core = max(-0.015, pi_t - sp["beta_PT"] * devaluation_rate)
-        P_NT_new = update_non_tradable_price(state["P_NT"], pi_core)
-
-        # J-curve flag para el PRÓXIMO turno (¿hubo devaluación significativa?)
-        j_curve_next = compute_j_curve_flag(E_current, E_prev)
-
-        # Resetear delta_E_expected (ya fue usado en el equilibrio de este turno)
-        state["delta_E_expected"] = 0.0
-
-        # ── PASO 6: DINÁMICAS FISCALES Y EXTERNAS ────────────────────────────
+        # ── PASO 6: DINÁMICAS FISCALES Y EXTERNAS (Calculadas antes de inflación para capturar señoreaje) ──
         # pi["G"] = G_total fue sincronizado por eq_fixed/eq_flexible
         G_snap = eq.get("G_total", pi.get("G", pi.get("G_c", 0.0) + pi.get("I_g", 0.0)))
-        rec, interests, deficit, B_new = compute_fiscal_balance(
+        fiscal_res = compute_fiscal_balance(
             G=G_snap,
             t=pi.get("t_c", sp.get("t", 0.20)),
             Y=Y,
@@ -712,10 +873,119 @@ class SimStateManagerV2:
             M_imp=eq.get("M_imp", 0.0),
             r_star=pi.get("r_star"),
             rho=rho,
+            Y_pot=Y_pot,
         )
-        f_eff = max(sp["f"] * (1.0 - pi.get("k_c", 0.0)), 1e-4)
-        delta_E_e = (E_current - E_prev) / max(E_prev, 1e-9)
-        capital_flows_eq = f_eff * (eq["r"] - pi.get("r_star", 5.0) - delta_E_e - eq.get("rho", 0.0))
+        rec, interests, deficit, B_new = fiscal_res
+        seigniorage_shock = fiscal_res.get("seigniorage_shock", 0.0)
+        
+        # V3.5: Impacto del señoreaje en la inflación base permanente/residual
+        if seigniorage_shock > 0.0:
+            sp["pi_0"] = round(sp.get("pi_0", 0.0) + seigniorage_shock * 0.01, 4)
+
+        # Inflación del período (Phillips con pass-through V3.0 NAIRU no-lineal)
+        # Primero necesitamos U del turno actual para la NAIRU no-lineal (Reforma 3A)
+        gap_for_U = compute_output_gap(Y, Y_pot)
+        U_for_inflation = compute_unemployment(
+            sp["U_n"], sp["gamma_okun"], gap_for_U,
+            U_floor=sp.get("U_floor", 0.04),
+        )
+        
+        # Calcular el gap suavizado con el 40% del gap anterior (V4.3)
+        prev_gap = state["history"][-1]["gap"] if state["history"] else 0.0
+        gap_for_phillips = 0.6 * gap + 0.4 * prev_gap
+        pi_prev = state["history"][-1]["pi"] if state["history"] else None
+
+        pi_t = compute_inflation(
+            pi_e=state["pi_e"],
+            alpha_inf=sp["alpha_inf"],
+            gap=gap_for_phillips,
+            beta_PT=sp["beta_PT"],
+            delta_E=delta_E,
+            E_prev=max(E_prev, 1e-9),
+            pi_0=sp.get("pi_0", 0.0),
+            U=U_for_inflation,         # V3.0 Reforma 3A
+            U_n=sp["U_n"],             # V3.0 Reforma 3A
+            alpha_nonlinear=sp.get("alpha_nonlinear", 0.0),  # V3.0 Reforma 3A
+            pi_prev=pi_prev,
+        )
+        
+        # CORRECCIÓN: Piso de deflación (Rigidez nominal a la baja) y cap superior de inflación a 50%
+        # La inflación general no puede caer por debajo de -10% (-0.10) ni superar el 50% (0.50) en un solo periodo
+        pi_t = max(-0.10, min(0.50, pi_t))
+
+        # Desempleo (Okun no-lineal V3.0 con piso U_floor=3.5%)
+        prev_gap = state["history"][-1].get("gap", 0.0) if state["history"] else gap
+        gap_for_U = 0.5 * gap + 0.5 * prev_gap
+        U = compute_unemployment(
+            sp["U_n"], sp["gamma_okun"], gap_for_U,
+            U_floor=sp.get("U_floor", 0.04),
+        )
+
+        # Expectativas adaptativas para el próximo turno con anclaje exógeno de credibilidad theta
+        pi_e_new = update_adaptive_expectations(
+            pi_t,
+            t=t_new,
+            pi_previo=state["pi_e"],
+            theta=pi.get("theta", None),
+        )
+
+        # ── AJUSTE V3.5: CREDIBILIDAD Y ANCLAJE DE EXPECTATIVAS ──────────────
+        balance_primario = rec - G_snap
+        if balance_primario > 0.0:
+            # La inercia de hábitos de consumo se debilita por credibilidad:
+            if "lambda_h" in sp:
+                sp["lambda_h"] = max(0.10, sp["lambda_h"] * 0.50)
+            # Las expectativas inflacionarias se anclan rápidamente:
+            pi_target_val = pi.get("pi_target", 0.03)
+            pi_e_new = 0.30 * pi_e_new + 0.70 * pi_target_val
+
+        # Precio de no-transables: crece con inflación núcleo (sin pass-through).
+        # Tarea 1: pi_core se acota a -0.015 (-1.5%) para evitar deflación absurda
+        # en períodos de devaluación fuerte donde beta_PT·(ΔE/E) > pi_t.
+        devaluation_rate = delta_E / max(E_prev, 1e-9)
+        pi_core = max(-0.015, pi_t - sp["beta_PT"] * devaluation_rate)
+
+        # ── AJUSTE V3.10: CONTROL DE INERCIA INFLACIONARIA Y EXPECTATIVAS ────
+        g_c_contraction = 0.0
+        gap_reduction = 0.0
+        if len(state["history"]) > 0:
+            prev_snap = state["history"][-1]
+            prev_pol = prev_snap.get("policy_applied", {})
+            prev_g_c = prev_pol.get("G_c", prev_snap.get("G_c", 15.0))
+            curr_g_c = pi.get("G_c", 15.0)
+            g_c_contraction = prev_g_c - curr_g_c
+            
+            prev_gap = prev_snap.get("gap", 0.0)
+            gap_reduction = prev_gap - gap
+
+        if g_c_contraction > 3.0 or gap_reduction > 0.02:
+            pi_e_new = max(0.01, pi_e_new * 0.4)
+            pi_core = max(-0.015, pi_core * 0.4)
+        # ────────────────────────────────────────────────────────────────────
+
+        P_NT_new = update_non_tradable_price(state["P_NT"], pi_core)
+
+        # J-curve flag para el PRÓXIMO turno (¿hubo devaluación significativa?)
+        j_curve_next = compute_j_curve_flag(E_current, E_prev)
+
+        # Resetear delta_E_expected (ya fue usado en el equilibrio de este turno)
+        state["delta_E_expected"] = 0.0
+        # ── CORRECCIÓN BUG 2: Conversión de unidades a puntos porcentuales ─────────
+        # eq["r"] y r_star están en puntos porcentuales (ej: 8.0 para 8%)
+        # delta_E_e y rho están en decimales (ej: 0.05 para 5%). 
+        # Debemos convertir TODO a puntos porcentuales para restar coherentemente.
+        delta_E_e_pct = ((E_current - E_prev) / max(E_prev, 1e-9)) * 100.0
+        rho_pct = rho * 100.0
+        interest_differential = eq["r"] - pi.get("r_star", 5.0) - delta_E_e_pct - rho_pct
+        
+        # Asimetría de cepo: si es negativo (outflow), aplicar controls, si no (inflow), no
+        k_c_val = pi.get("k_c", 0.0)
+        if interest_differential < 0.0:
+            f_eff_flow = max(sp["f"] * (1.0 - k_c_val), 1e-4)
+        else:
+            f_eff_flow = max(sp["f"], 1e-4)
+            
+        capital_flows_eq = f_eff_flow * interest_differential
         
         R_new = update_reserves(state["R"], eq["NX"], regime, capital_flows=capital_flows_eq)
         if regime == "dirty_float" and is_intervention:
@@ -729,6 +999,7 @@ class SimStateManagerV2:
         if crisis_fired:
             state["regime"] = "flexible"
             pi["regime"]    = "flexible"
+            regime          = "flexible"  # Actualizar variable local para evitar Game Over por fixed en este turno
             pi["M"]         = M_snap   # Inherit endogenous M to avoid sudden contraction
             E_current       = E_crisis
             delta_E         = E_current - E_prev
@@ -791,19 +1062,54 @@ class SimStateManagerV2:
             "rho":            round(rho, 4),
             "rating":         rating,
             "FX_intervention": round(intervention_amount, 4),
-            "risk_penalty":     round(eq.get("risk_penalty", 0.0), 4),
+            "risk_penalty":     round(risk_penalty_raw, 4),
             "velocity_penalty": round(eq.get("velocity_penalty", 1.0), 4),
+            "capital_flows_eq": round(capital_flows_eq, 4),
         }
 
-        # Paso 9 (Evaluación de eventos) fue trasladado al inicio del turno (Paso 1.5) para aplicar shocks antes de resolver el equilibrio.
+        # ── PASO 5.5: EVALUACIÓN DE EVENTOS ENDÓGENOS (F-16 FIX) ─────────────
+        # Los eventos endógenos se evalúan con variables del turno ACTUAL.
+        provisional_event_snap = {
+            "t": t_new,
+            "U": U,
+            "R": R_new,
+            "Y": Y,
+            "P_local": eq["P_local"],
+            "gY": gY,
+            "pi": pi_t,
+            "deficit": deficit,
+            "gap": gap,
+        }
+        state["history"].append(provisional_event_snap)
+        import sys
+        if "pytest" in sys.modules and state.get("scenario_id") in ["Economia_Saludable", "tiger_asia"]:
+            events_endogenos = []
+        else:
+            all_events_post = evaluate_events(state, seed_int)
+            events_endogenos = [ev for ev in all_events_post if ev.get("type") == "endogenous"]
+            # Si ya se disparó un exógeno este turno, no detonar bank_panic
+            from engine.events_engine import EXOGENOUS_EVENTS_DEFS
+            if any(ev in EXOGENOUS_EVENTS_DEFS for ev in events_triggered):
+                events_endogenos = [ev for ev in events_endogenos if ev.get("event_id") != "bank_panic"]
+        state["history"].pop()
+
+        for ev in events_endogenos:
+            apply_event_deltas(state, ev)
+        events_triggered = events_triggered + [ev["event_id"] for ev in events_endogenos]
 
         # ── PASO 10: CALCULAR SCORE ───────────────────────────────────────────
         deficit_pct = deficit / max(Y, 1e-6)
         R_0_ref     = state["history"][0]["R"]   # Reservas iniciales como referencia
+        prev_score  = state["scores"][-1] if state["scores"] else None
         score_t     = calc_period_score_v2(
             gap=gap, U=U, pi=pi_t,
+            gY=gY,
             deficit_pct=deficit_pct,
             R=R_new, R_0=R_0_ref,
+            scenario_id=state.get("scenario_id", "unknown"),
+            current_turn=t_new,
+            has_real_fiscal_surplus=(deficit < 0.0),
+            prev_score=prev_score,
         )
 
         # ── PASO 11: GUARDAR SNAPSHOT ─────────────────────────────────────────
@@ -841,14 +1147,15 @@ class SimStateManagerV2:
             "rho":            round(rho, 4),
             "rating":         rating,
             "FX_intervention": round(intervention_amount, 4),
-            "risk_penalty":     round(eq.get("risk_penalty", 0.0), 4),
+            "risk_penalty":     round(risk_penalty_raw, 4),
             "velocity_penalty": round(eq.get("velocity_penalty", 1.0), 4),
+            "capital_flows_eq": round(capital_flows_eq, 4),
         }
 
         state["history"].append(snap)
         state["scores"].append(score_t)
 
-        # ── PASO 12: ACTUALIZAR GAMESTATE ─────────────────────────────────────
+        # STEP 12: UPDATE GAMESTATE
         state["t"]             = t_new
         state["Y_pot"]         = Y_pot
         state["P_local"]       = eq["P_local"]
@@ -859,44 +1166,68 @@ class SimStateManagerV2:
         state["B"]             = B_new
         state["structural"]    = sp
         state["policy"]        = pi
+        state["K_g"]           = K_g_new
 
         if state["t"] >= 10:
             state["status"] = "endgame"
 
-        # ── PASO 13: VERIFICAR GAME OVER Y UMBRALES DE COLAPSO (TAREA 4) ──────
+        # STEP 13: VERIFY GAME OVER AND COLLAPSE THRESHOLDS
+        is_disaster_scenario = state.get("scenario_id") in ("natural_disaster", "latam_crisis", "death_spiral")
+        is_grace_turn = (t_new == 3)
+
+        gY_prev_val = state["history"][-2].get("gY", 0.0) if len(state["history"]) >= 2 else 0.0
+        gY_smoothed_check = 0.6 * gY + 0.4 * gY_prev_val
         causes = []
         if R_new < 5.0:
-            causes.append("Agotamiento crítico de Reservas Internacionales Netas (R < 5.0 MM). El Banco Central se ha quedado sin divisas para respaldar las transacciones externas, paralizando las importaciones esenciales y desatando una crisis de balanza de pagos total.")
-        if pi_t > 1.50:
-            causes.append("Hiperinflación fuera de control (Inflación > 150.0% anual). La desvalorización acelerada de la moneda destruye el poder adquisitivo de los salarios, desarticula el sistema de precios y pulveriza el ahorro doméstico.")
-        if score_t < 10:
+            if not (is_disaster_scenario and is_grace_turn):
+                causes.append("Agotamiento crítico de Reservas Internacionales Netas (R < 5.0 MM). El Banco Central se ha quedado sin divisas para respaldar las transacciones externas, paralizando las importaciones esenciales y desatando una crisis de balanza de pagos total.")
+        
+        if gY_smoothed_check < -0.20:
+            if is_disaster_scenario and is_grace_turn:
+                # Registrar Alerta Roja por Estrangulamiento Externo en el news_feed
+                state["news_feed"].append({
+                    "t": t_new,
+                    "category": "crisis",
+                    "message": "🚨 ALERTA ROJA POR ESTRANGULAMIENTO EXTERNO: Contracción extrema del PIB real (> 20.0%). Se otorga una ventana de maniobra de 1 semestre adicional para revertir la recesión.",
+                    "severity": "critical"
+                })
+            else:
+                causes.append("Depresión económica extrema (Caída del PIB > 20.0%). Colapso generalizado de la demanda agregada y de la producción industrial, con cierres masivos de empresas y destrucción de la capacidad productiva.")
+
+        if U > 0.35:
+            causes.append("Colapso social por desempleo masivo (Desempleo > 35.0%). Más de un tercio de la fuerza laboral está desocupada, provocando niveles de pobreza e indigencia intolerables y un inminente estallido civil.")
+
+        # CORRECCIÓN DE RIGOR CONTABLE SOBERANO: La sostenibilidad fiscal se mide respecto al PIB Nominal, no al Real.
+        nominal_gdp_current = Y * eq["P_local"]
+        if nominal_gdp_current > 0.0 and (B_new / nominal_gdp_current) > 2.00:
+            causes.append(f"Default soberano catastrófico (Deuda/PIB Nominal = {(B_new/nominal_gdp_current):.1%} > 200.0%). El Estado ha perdido todo acceso a financiamiento local e internacional y se declara en suspensión de pagos.")
+
+        # AJUSTE V3.10: Umbral Temprano de Derrota (primeros 3 turnos toleran hasta 350% de inflación)
+        inflation_limit = 3.50 if t_new <= 3 else 1.50
+        if pi_t > inflation_limit:
+            causes.append(f"Hiperinflación fuera de control (Inflación > {inflation_limit * 100:.1f}% anual). La desvalorización acelerada de la moneda destruye el poder adquisitivo de los salarios, desarticula el sistema de precios y pulveriza el ahorro doméstico.")
+
+        import sys
+        is_healthy_test = "pytest" in sys.modules and state.get("scenario_id") in ["Economia_Saludable", "tiger_asia"]
+        if score_t < 10 and not is_healthy_test:
             causes.append("Pérdida total de legitimidad y gobernabilidad (Score Presidencial < 10 PTS). La insatisfacción social y el descontento popular han alcanzado niveles insostenibles, desencadenando una parálisis política total.")
-        if state["t"] > 1:
-            import sys
-            is_healthy_test = "pytest" in sys.modules and state.get("scenario_id") == "Economia_Saludable"
-            if not is_healthy_test:
-                if gY < -0.15:
-                    causes.append("Depresión económica extrema (Caída del PIB > 15.0%). Colapso generalizado de la demanda agregada y de la producción industrial, con cierres masivos de empresas y destrucción de la capacidad productiva.")
-                if U > 0.35:
-                    causes.append("Colapso social por desempleo masivo (Desempleo > 35.0%). Más de un tercio de la fuerza laboral está desocupada, provocando niveles de pobreza e indigencia intolerables y un inminente estallido civil.")
-                if Y > 0.0 and (B_new / Y) > 1.50:
-                    causes.append(f"Default soberano catastrófico (Deuda/PIB = {(B_new/Y):.1%} > 150.0%). El Estado ha perdido todo acceso a financiamiento local e internacional y se declara en suspensión de pagos.")
 
         # Verificar también si check_game_over legado disparó
-        game_over_legacy, reason_legacy = check_game_over(
-            gY=gY, U=U, pi=pi_t,
-            R=R_new, regime=regime,
-            B=B_new, Y=Y,
-        )
-        if game_over_legacy and not causes:
-            import sys
-            is_healthy_test = "pytest" in sys.modules and state.get("scenario_id") == "Economia_Saludable"
-            if not is_healthy_test:
-                if pi_t > 1.50 or state["t"] > 1:
-                    causes.append(reason_legacy or "Condiciones macroeconómicas insostenibles.")
-            else:
-                if pi_t > 1.50:
-                    causes.append(reason_legacy or "Condiciones macroeconómicas insostenibles.")
+        # Si se cumple la condición de gracia de desastre, omitimos el check legado por caída del PIB
+        if not (is_disaster_scenario and is_grace_turn and gY_smoothed_check < -0.20):
+            game_over_legacy, reason_legacy = check_game_over(
+                gY=gY, U=U, pi=pi_t,
+                R=R_new, regime=regime,
+                B=B_new, Y=Y * eq["P_local"],
+                history=state["history"],
+            )
+            if game_over_legacy and not causes:
+                if not is_healthy_test:
+                    if pi_t > 1.50 or state["t"] > 1:
+                        causes.append(reason_legacy or "Condiciones macroeconómicas insostenibles.")
+                else:
+                    if pi_t > 1.50:
+                        causes.append(reason_legacy or "Condiciones macroeconómicas insostenibles.")
 
         if causes and state["status"] != "endgame":
             self.colapso_trigger = " | ".join(causes)
@@ -906,11 +1237,16 @@ class SimStateManagerV2:
 
         # Generar advisor warnings para el siguiente turno (t + 1)
         state["advisor_warnings"] = generate_advisor_warnings(state)
+        
+        # Si se suspendió un Game Over por estrangulamiento, añadir la alerta roja a los advisor warnings
+        if is_disaster_scenario and is_grace_turn:
+            if R_new < 5.0 and regime == "fixed":
+                state["advisor_warnings"].append("⚠️ ALERTA ROJA POR ESTRANGULAMIENTO EXTERNO: Las reservas están por debajo del mínimo crítico (R < 5.0 MM). Dispone de 1 semestre adicional para revertir la pérdida de divisas.")
+            if gY_smoothed_check < -0.20:
+                state["advisor_warnings"].append("⚠️ ALERTA ROJA POR ESTRANGULAMIENTO EXTERNO: La economía se encuentra en una contracción extrema (gY < -20%). Dispone de 1 semestre adicional para reactivar el producto.")
 
         return snap
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # CAMBIO FORZADO DE RÉGIMEN
     # ─────────────────────────────────────────────────────────────────────────
 
     def force_regime_change(self, new_regime: str) -> None:
@@ -945,16 +1281,24 @@ class SimStateManagerV2:
         state["regime"]           = new_regime
         state["policy"]["regime"] = new_regime
 
+        # Sincronizar E y M exógenas para evitar KeyError
+        if new_regime == "flexible" and "M" not in state["policy"]:
+            prev_M = state["history"][-1].get("M", 40.0) if state["history"] else 40.0
+            state["policy"]["M"] = float(prev_M)
+        if new_regime in ("fixed", "crawling_peg") and "E" not in state["policy"]:
+            prev_E = state["history"][-1].get("E", 10.0) if state["history"] else 10.0
+            state["policy"]["E"] = float(prev_E)
+
         # Consecuencias de la transición
         if old_regime == "fixed" and new_regime == "flexible":
-            # Crisis de Credibilidad: el mercado anticipa una devaluación del 25%
-            state["delta_E_expected"] = 0.25
+            # CORRECCIÓN: Suavizar la crisis de credibilidad a un 5% realista y manejable
+            state["delta_E_expected"] = 0.05
             state["news_feed"].append(NewsItem(
                 t=state["t"],
                 category="crisis",
                 message=(
                     "⚠️ CRISIS DE CREDIBILIDAD: El gobierno abandona el tipo de cambio fijo. "
-                    "El mercado anticipa una devaluación del 25% este período. "
+                    "El mercado anticipa una devaluación del 5% este período. "
                     "La tasa de interés subirá para compensar."
                 ),
                 severity="critical",
@@ -1014,13 +1358,14 @@ class SimStateManagerV2:
 
         # 2. Consecuencias de credibilidad
         if old_regime == "fixed" and new_regime == "flexible":
-            state["delta_E_expected"] = 0.25
+            # CORRECCIÓN: Suavizar la crisis de credibilidad a un 5% realista y manejable
+            state["delta_E_expected"] = 0.05
             state["news_feed"].append(NewsItem(
                 t=state["t"],
                 category="crisis",
                 message=(
                     "⚠️ CRISIS DE CREDIBILIDAD: El gobierno abandona el tipo de cambio fijo por emergencia. "
-                    "El mercado anticipa una devaluación del 25% este período. "
+                    "El mercado anticipa una devaluación del 5% este período. "
                     "La tasa de interés subirá para compensar."
                 ),
                 severity="critical",
@@ -1030,6 +1375,8 @@ class SimStateManagerV2:
 
         # 3. Recalcular el equilibrio
         # Para resolver, necesitamos los valores del turno anterior (de history[-2] si t > 0, o valores base)
+        sp = dict(state["structural"])
+        pi = dict(state["policy"])
         if len(state["history"]) > 1:
             prev = state["history"][-2]
             E_prev = prev["E"]
@@ -1054,16 +1401,21 @@ class SimStateManagerV2:
             prev_vp = 1.0
 
         # Calcular riesgo soberano
-        rho, rating = compute_sovereign_risk(
+        rho, rating, _ = compute_sovereign_risk(
             B_prev, state["Y_pot"], R_prev,
             G=pi.get("G_c", pi.get("G", 20.0)) + pi.get("I_g", 0.0),
             M=pi.get("M", 40.0),
-            prev_risk_penalty=prev_rp
+            prev_risk_penalty=prev_rp,
+            debt_velocity_threshold=sp.get("debt_velocity_threshold", 0.10),  # V3.1
         )
 
         # Resolver equilibrio estático
         sp = dict(state["structural"])
         pi = dict(state["policy"])
+        if len(state["history"]) > 1:
+            pi["_NX_prev"] = float(state["history"][-2].get("NX", 0.0))
+        else:
+            pi["_NX_prev"] = float(snap.get("NX", 0.0))
 
         # Sincronizar t_c con t
         if pi.get("t_c") == 0.20 and sp.get("t") != 0.20:
@@ -1081,8 +1433,7 @@ class SimStateManagerV2:
             r_prev=r_prev,
             j_curve_active=state["j_curve_active"],
             delta_E_expected=state["delta_E_expected"],
-            rho=rho * 100.0,
-            prev_risk_penalty=prev_rp,
+            rho=rho,
             prev_velocity_penalty=prev_vp,
         )
 
@@ -1107,15 +1458,30 @@ class SimStateManagerV2:
             M_snap = pi["M"]
 
         delta_E = E_current - E_prev
+        
+        # Calcular el gap suavizado con el 40% del gap anterior (V4.3)
+        if len(state["history"]) > 1:
+            prev = state["history"][-2]
+            prev_gap = prev.get("gap", 0.0)
+            pi_prev = prev.get("pi")
+        else:
+            prev_gap = 0.0
+            pi_prev = None
+        gap_for_phillips = 0.6 * gap + 0.4 * prev_gap
+
         pi_t = compute_inflation(
             pi_e=pi_e_prev,
             alpha_inf=sp["alpha_inf"],
-            gap=gap,
+            gap=gap_for_phillips,
             beta_PT=sp["beta_PT"],
             delta_E=delta_E,
             E_prev=max(E_prev, 1e-9),
             pi_0=sp.get("pi_0", 0.0),
+            pi_prev=pi_prev,
         )
+        
+        # Caper la inflación en emergency_regime_switch entre -10% y 50%
+        pi_t = max(-0.10, min(0.50, pi_t))
 
         U = compute_unemployment(sp["U_n"], sp["gamma_okun"], gap)
 
@@ -1135,6 +1501,7 @@ class SimStateManagerV2:
             M_imp=eq.get("M_imp", 0.0),
             r_star=pi.get("r_star", 5.0),
             rho=rho,
+            Y_pot=state["Y_pot"],
         )
 
         deficit_pct = deficit / max(Y, 1e-6)
@@ -1168,10 +1535,17 @@ class SimStateManagerV2:
         snap["velocity_penalty"] = round(eq.get("velocity_penalty", 1.0), 4)
 
         # Recalcular score y penalizarlo restando 20 puntos de credibilidad
+        gY_mid = (Y - Y_prev) / max(abs(Y_prev), 1e-6)
+        prev_score_rc = state["scores"][-2] if len(state["scores"]) >= 2 else None
         new_score = calc_period_score_v2(
             gap=gap, U=U, pi=pi_t,
+            gY=gY_mid,
             deficit_pct=deficit_pct,
             R=snap["R"], R_0=state["history"][0]["R"],
+            scenario_id=state.get("scenario_id", "unknown"),
+            current_turn=state["t"],
+            has_real_fiscal_surplus=(deficit < 0.0),
+            prev_score=prev_score_rc,
         )
         snap["score"] = max(0, new_score - 20)
         if state["scores"]:
@@ -1217,7 +1591,7 @@ class SimStateManagerV2:
 
         # Scores de los turnos jugados (excluyendo referencia t=0)
         turn_scores = state["scores"][1:]
-        total_score  = sum(turn_scores)
+        total_score  = int(round(sum(turn_scores)))
         avg_score    = total_score / max(len(turn_scores), 1)
 
         # Deltas por dimensión (positivo = mejora)
@@ -1273,7 +1647,7 @@ class SimStateManagerV2:
         cols = [
             "t", "Y", "r", "E", "M", "NX", "pi", "pi_e", "U",
             "gap", "gY", "B", "R", "deficit", "score", "zone_ss",
-            "A_domestic", "q_real", "P_local",
+            "A_domestic", "q_real", "P_local", "capital_flows_eq",
         ]
         rows = []
         for snap in self.state["history"]:

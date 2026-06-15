@@ -152,72 +152,82 @@ def plot_endgame_spider(snap_0: TurnSnapshot, snap_f: TurnSnapshot, history: lis
     return fig
 
 
-def get_custom_narrative(summary: dict, snap_f: TurnSnapshot, snap_0: TurnSnapshot) -> str:
+def get_custom_narrative(summary: dict, snap_f: TurnSnapshot, snap_0: TurnSnapshot, scenario_id: str = "") -> str:
     """
     Retorna un veredicto narrativo personalizado según el desempeño fiscal, monetario y externo.
     """
-    verdict = summary["verdict"]
-    delta_score = summary["delta_score"]
     colapso_trigger = summary.get("colapso_trigger")
     
     if colapso_trigger:
         reasons_list = colapso_trigger.split(" | ")
         reasons_bulleted = "\n".join([f"• {reason}" for reason in reasons_list])
         return (
-            "🚨 CRAC MACROECONÓMICO Y COLAPSO DE GOBIERNO:\n"
+            "🚨 COLAPSO DE GOBERNABILIDAD Y CRAC MACROECONÓMICO:\n"
             f"{reasons_bulleted}\n\n"
             "La insostenibilidad estructural de sus políticas condujo a un desenlace crítico. "
             "La administración ha sido removida/intervenida políticamente para evitar mayores perjuicios soberanos."
         )
         
-    # Calcular ratios
-    debt_service_ratio = (snap_f["r"] * snap_f["B"]) / max(snap_f["G"] + snap_f["r"] * snap_f["B"], 1e-6) * 100
-    R_ratio = snap_f["R"] / max(snap_0["R"], 1e-6)
-    pi_final = snap_f["pi"]
+    final_score = snap_f["score"]
     
-    narrative = ""
-    if verdict == "reelected":
-        if debt_service_ratio >= 30.0:
-            narrative = (
-                "¡El pueblo reconoció su esfuerzo y lo ha REELEGIDO con honores! Impulsó el empleo "
-                "y mantuvo contenta a la ciudadanía, pero la 'Bola de Nieve' de la deuda pública "
-                "está activada y le pasará una costosa factura a su propio sucesor."
-            )
-        elif R_ratio < 0.4:
-            narrative = (
-                "¡Logró la REELECCIÓN! No obstante, ha vaciado la caja de reservas del Banco Central. "
-                "El país es sumamente vulnerable ante cualquier shock cambiario o salida de capitales futura."
-            )
-        elif pi_final > 0.08:
-            narrative = (
-                "¡Ha sido REELEGIDO en las urnas! El crecimiento económico amortiguó el descontento, "
-                "pero la inflación latente está erosionando el poder adquisitivo de los salarios. "
-                "La estabilidad social pende de un hilo."
-            )
-        else:
-            narrative = (
-                "¡VICTORIA ROTUNDA! Ha liderado un mandato ejemplar de estabilidad y crecimiento. "
-                "Logró conciliar la sostenibilidad fiscal con pleno empleo y estabilidad cambiaria. "
-                "Se le considera el mejor Ministro de Economía en la historia moderna del país."
-            )
-    else:  # removed
-        if delta_score < -150:
-            narrative = (
-                "El electorado lo ha castigado severamente y ha REMOVIDO a su partido del gobierno. "
-                "La contracción económica y las medidas erráticas pulverizaron el score general del país."
-            )
-        elif pi_final > 0.10:
-            narrative = (
-                "Fue DERROTADO en las urnas. La inflación desbocada destruyó los ingresos reales de la "
-                "población, haciendo imposible que renovaran la confianza en su gabinete de ministros."
-            )
-        else:
-            narrative = (
-                "El pueblo votó por un cambio de rumbo en el poder. Aunque evitó el colapso crítico del país, "
-                "la falta de reformas audaces y el estancamiento económico desgastaron su base política electoral."
-            )
-            
-    return narrative
+    if scenario_id == "death_spiral":
+        return (
+            "🗳️ Reelección Ajustada (Héroe de la Estanflación):\n"
+            "¡Logro histórico! Su gestión logró lo que parecía imposible: sobrevivir a la espiral hiperinflacionaria boliviana. "
+            "A pesar del desgaste electoral inherente a una terapia de choque tan profunda (concluyendo con un score de "
+            f"{final_score:.1f} pts), el electorado le ha concedido un voto de confianza y la reelección para consolidar "
+            "el retorno definitivo a la estabilidad institucional y el crecimiento."
+        )
+        
+    if scenario_id == "latam_crisis":
+        return (
+            "🗳️ Reelección de Emergencia:\n"
+            "¡Mandato revalidado! En medio de la asfixia por deuda externa y fuga de capitales de la crisis de 1982, "
+            "su gestión logró reequilibrar la balanza de pagos y detener el pánico cambiario usando cepos y aranceles oportunos. "
+            "Aunque el costo social fue severo (concluyendo con un score de "
+            f"{final_score:.1f} pts), el país evitó el default catastrófico y la ciudadanía premia su solidez con la reelección."
+        )
+    
+    if final_score >= 70.0:
+        base_msg = (
+            "🗳️ Landslide Electoral (Reelección aplastante): "
+            "¡Histórico! El electorado ha premiado su brillante conducción de la economía con un apoyo abrumador en las urnas. "
+            "Su enfoque centrado en el bienestar ciudadano (bajo desempleo, inflación controlada y crecimiento sólido) "
+            "le otorga un mandato incuestionable para profundizar las reformas."
+        )
+    elif final_score >= 50.0:
+        base_msg = (
+            "🗳️ Reelección Ajustada: "
+            "¡Victoria trabajada! Logró asegurar la reelección, aunque con un margen estrecho. "
+            "La ciudadanía reconoce la estabilidad en el empleo y el control inflacionario, "
+            "pero advierte tensiones latentes en el crecimiento. Su nuevo mandato requerirá tejer amplios consensos."
+        )
+    elif final_score >= 30.0:
+        base_msg = (
+            "🗳️ Desgaste Político (No reelegido): "
+            "Derrota en las urnas. El severo desgaste político acumulado debido a la desaceleración y la pérdida "
+            "de dinamismo en los 'problemas de la mesa de la cocina' convencieron al electorado de votar por un cambio de rumbo. "
+            "Debe entregar el mando a la oposición."
+        )
+    else:
+        base_msg = (
+            "🗳️ Colapso de Gobernabilidad: "
+            "Crisis política total. La desaprobación ciudadana ha alcanzado niveles críticos debido al deterioro severo "
+            "del empleo y el poder adquisitivo. Protestas sociales masivas obligan a una reestructuración inmediata "
+            "de la administración."
+        )
+
+    # Añadir advertencias fiscales o cambiarias personalizadas
+    warnings = []
+    if snap_f.get("B", 0.0) > 120.0:
+        warnings.append("⚠️ Sostenibilidad Fiscal: La deuda pública elevada devela un efecto bola de nieve que amenaza la sostenibilidad fiscal de largo plazo.")
+    if snap_f.get("R", 50.0) < 15.0:
+        warnings.append("⚠️ Sector Externo: El bajo nivel de reservas internacionales expone al país a una alta vulnerabilidad cambiaria y riesgo de balanza de pagos.")
+        
+    if warnings:
+        base_msg += "\n\n" + "\n".join(warnings)
+        
+    return base_msg
 
 
 def sanitize_for_pdf(text: str) -> str:
@@ -258,7 +268,7 @@ def sanitize_for_pdf(text: str) -> str:
     return "".join(safe_chars)
 
 
-def generate_pdf_report(summary: dict, history: list[TurnSnapshot], scenario_name: str, regime: str, difficulty: str) -> bytes:
+def generate_pdf_report(summary: dict, history: list[TurnSnapshot], scenario_name: str, regime: str, difficulty: str, scenario_id: str = "") -> bytes:
     """
     Genera un reporte PDF formal de la administración usando FPDF.
     """
@@ -302,11 +312,18 @@ def generate_pdf_report(summary: dict, history: list[TurnSnapshot], scenario_nam
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
     pdf.ln(2)
     
-    verdict_label = {
-        "reelected": "REELEGIDO CON HONORES",
-        "removed": "DESTITUIDO EN ELECCIONES (NO REELEGIDO)",
-        "impeached": "GOBIERNO INTERRUMPIDO (GAME OVER - COLAPSO)"
-    }.get(summary["verdict"], summary["verdict"].upper())
+    snap_f_temp = summary["t10_snapshot"]
+    final_score_temp = snap_f_temp["score"]
+    if summary["verdict"] == "impeached":
+        verdict_label = "COLAPSO DE GOBERNABILIDAD (GAME OVER)"
+    elif final_score_temp >= 70.0:
+        verdict_label = "LANDSLIDE ELECTORAL (REELECCIÓN APLASTANTE)"
+    elif final_score_temp >= 50.0:
+        verdict_label = "REELECCIÓN AJUSTADA"
+    elif final_score_temp >= 30.0:
+        verdict_label = "DESGASTE POLÍTICO (NO REELEGIDO)"
+    else:
+        verdict_label = "COLAPSO DE GOBERNABILIDAD"
     
     pdf.set_font("Helvetica", "B", 11)
     pdf.cell(0, 6, f"Veredicto del Mandato: {verdict_label}", ln=True)
@@ -382,7 +399,7 @@ def generate_pdf_report(summary: dict, history: list[TurnSnapshot], scenario_nam
     
     pdf.set_font("Helvetica", "I", 10)
     pdf.set_text_color(80, 80, 80)
-    narrative_text = get_custom_narrative(summary, snap_f, snap_0)
+    narrative_text = get_custom_narrative(summary, snap_f, snap_0, scenario_id)
     pdf.multi_cell(0, 5, sanitize_for_pdf(narrative_text))
     
     # Firma y cierre
@@ -435,15 +452,39 @@ def render_endgame_screen(mgr: SimStateManagerV2) -> None:
     regime = state.get("regime", "fixed")
     
     # --- RENDERIZACIÓN DE LA UI STREAMLIT ---
-    
-    # Título con globos si es reelegido
-    if summary["verdict"] == "reelected":
-        st.balloons()
-        verdict_badge = "<span style='background-color: #10b981; color: #111827; padding: 6px 12px; border-radius: 6px; font-weight: 800; font-size: 1rem;'>🎉 MANDATO REELEGIDO</span>"
-    elif summary["verdict"] == "removed":
-        verdict_badge = "<span style='background-color: #f59e0b; color: #111827; padding: 6px 12px; border-radius: 6px; font-weight: 800; font-size: 1rem;'>📉 REEMPLAZADO EN URNAS</span>"
+    from ui.styles import EXECUTIVE_CSS, STRATEGY_CSS
+    theme = st.session_state.get("theme", "executive")
+    if theme == "strategy":
+        st.markdown(STRATEGY_CSS, unsafe_allow_html=True)
+        bg_card = "#111827"
+        border_card = "#1e293b"
+        text_title = "#cbd5e1"
+        text_label = "#64748b"
+        text_value = "#f8fafc"
+        hr_color = "#1e293b"
     else:
-        verdict_badge = "<span style='background-color: #ef4444; color: #f8fafc; padding: 6px 12px; border-radius: 6px; font-weight: 800; font-size: 1rem;'>🔥 GOBIERNO COLAPSADO</span>"
+        st.markdown(EXECUTIVE_CSS, unsafe_allow_html=True)
+        bg_card = "#ffffff"
+        border_card = "#cbd5e1"
+        text_title = "#0f172a"
+        text_label = "#475569"
+        text_value = "#0f172a"
+        hr_color = "#e2e8f0"
+        
+    # Título con globos según aprobación
+    final_score = snap_f["score"]
+    is_impeached = (summary["verdict"] == "impeached")
+    
+    if is_impeached or final_score < 30.0:
+        verdict_badge = "<span style='background-color: #ef4444; color: #f8fafc; padding: 6px 12px; border-radius: 6px; font-weight: 800; font-size: 1rem;'>🔥 COLAPSO DE GOBERNABILIDAD</span>"
+    elif final_score >= 70.0:
+        st.balloons()
+        verdict_badge = "<span style='background-color: #10b981; color: #111827; padding: 6px 12px; border-radius: 6px; font-weight: 800; font-size: 1rem;'>🎉 LANDSLIDE ELECTORAL</span>"
+    elif final_score >= 50.0:
+        st.balloons()
+        verdict_badge = "<span style='background-color: #10b981; color: #111827; padding: 6px 12px; border-radius: 6px; font-weight: 800; font-size: 1rem;'>🎉 REELECCIÓN AJUSTADA</span>"
+    else:
+        verdict_badge = "<span style='background-color: #f59e0b; color: #111827; padding: 6px 12px; border-radius: 6px; font-weight: 800; font-size: 1rem;'>📉 DESGASTE POLÍTICO</span>"
         
     st.markdown(f"""
     <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;'>
@@ -456,74 +497,77 @@ def render_endgame_screen(mgr: SimStateManagerV2) -> None:
     
     with col_left:
         # --- VEREDICTO DE GOBIERNO ---
-        box_class = "endgame-box" if summary["verdict"] == "reelected" else "game-over-box"
-        verdict_text = {
-            "reelected": "¡Felicidades Ministro! El pueblo ha renovado masivamente su confianza en el gabinete económico. Su capacidad técnica y política logró sortear las crisis teóricas del trilema cambiario y dejó al país en una senda virtuosa.",
-            "removed": "Derrota electoral. La ciudadanía ha decidido votar por un cambio de rumbo debido a los retrocesos o al desequilibrio macroeconómico acumulado durante el semestre final de su gestión.",
-            "impeached": "Destitución y juicio político. La acumulación destructiva de deudas sin sostenibilidad fiscal o la pérdida total de reservas del Banco Central forzó su caída prematura."
-        }.get(summary["verdict"], "")
+        if is_impeached or final_score < 30.0:
+            box_class = "game-over-box"
+            verdict_text = "Crisis y colapso de gobernabilidad. La pérdida del apoyo popular o la violación de los límites macroeconómicos duros provocó la caída de la administración."
+        elif final_score >= 50.0:
+            box_class = "endgame-box"
+            verdict_text = "¡Felicidades Ministro! Ha logrado conservar el poder y consolidar una mayoría política estable basada en la aprobación ciudadana."
+        else:
+            box_class = "game-over-box"
+            verdict_text = "Transición de poder. La ciudadanía castigó el desempeño en las urnas, forzando una entrega de mando ordenada del gobierno a la oposición."
         
         st.markdown(f"""
         <div class='{box_class}'>
           <h3 style='margin-top: 0; color: #f8fafc; font-weight: 800;'>📊 VEREDICTO FINAL DE GOBIERNO</h3>
-          <p style='color: #cbd5e1; font-size: 0.95rem; line-height: 1.5; margin-bottom: 15px;'>"{get_custom_narrative(summary, snap_f, snap_0)}"</p>
+          <p style='color: #cbd5e1; font-size: 0.95rem; line-height: 1.5; margin-bottom: 15px;'>"{get_custom_narrative(summary, snap_f, snap_0, scenario_id)}"</p>
           <div style='font-size: 0.85rem; color: #94a3b8; font-style: italic;'>{verdict_text}</div>
         </div>
         """, unsafe_allow_html=True)
         
         # --- TARJETA DE METADATOS Y EVENTOS ---
         st.markdown(f"""
-        <div style='background-color: #111827; border: 1px solid #1e293b; border-radius: 8px; padding: 18px; margin-bottom: 15px;'>
-          <h4 style='margin-top:0; color: #cbd5e1; font-size: 1rem;'>📋 Estadísticas del Mandato</h4>
+        <div style='background-color: {bg_card}; border: 1px solid {border_card}; border-radius: 8px; padding: 18px; margin-bottom: 15px;'>
+          <h4 style='margin-top:0; color: {text_title}; font-size: 1rem;'>📋 Estadísticas del Mandato</h4>
           <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px;'>
             <div>
-              <div style='font-size: 0.75rem; color: #64748b;'>ESCENARIO</div>
-              <div style='font-size: 0.9rem; font-weight: 700; color: #f8fafc;'>{scenario_name}</div>
+              <div style='font-size: 0.75rem; color: {text_label};'>ESCENARIO</div>
+              <div style='font-size: 0.9rem; font-weight: 700; color: {text_value};'>{scenario_name}</div>
             </div>
             <div>
-              <div style='font-size: 0.75rem; color: #64748b;'>DIFICULTAD</div>
-              <div style='font-size: 0.9rem; font-weight: 700; color: #f8fafc;'>{difficulty.upper()}</div>
+              <div style='font-size: 0.75rem; color: {text_label};'>DIFICULTAD</div>
+              <div style='font-size: 0.9rem; font-weight: 700; color: {text_value};'>{difficulty.upper()}</div>
             </div>
             <div>
-              <div style='font-size: 0.75rem; color: #64748b;'>RÉGIMEN FINAL</div>
-              <div style='font-size: 0.9rem; font-weight: 700; color: #f8fafc;'>{regime.upper()}</div>
+              <div style='font-size: 0.75rem; color: {text_label};'>RÉGIMEN FINAL</div>
+              <div style='font-size: 0.9rem; font-weight: 700; color: {text_value};'>{regime.upper()}</div>
             </div>
             <div>
-              <div style='font-size: 0.75rem; color: #64748b;'>DURACIÓN</div>
-              <div style='font-size: 0.9rem; font-weight: 700; color: #f8fafc;'>{len(history)-1} Semestres</div>
+              <div style='font-size: 0.75rem; color: {text_label};'>DURACIÓN</div>
+              <div style='font-size: 0.9rem; font-weight: 700; color: {text_value};'>{len(history)-1} Semestres</div>
             </div>
           </div>
-          <hr style='border-color: #1e293b; margin: 12px 0;'>
+          <hr style='border-color: {hr_color}; margin: 12px 0;'>
           <div style='display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; text-align: center;'>
             <div>
               <div style='font-size: 1.5rem; font-weight: 800; color: #3b82f6;'>{summary["total_score"]}</div>
-              <div style='font-size: 0.7rem; color: #94a3b8;'>SCORE ACUMULADO</div>
+              <div style='font-size: 0.7rem; color: {text_label};'>SCORE ACUMULADO</div>
             </div>
             <div>
               <div style='font-size: 1.5rem; font-weight: 800; color: #10b981;'>{summary["avg_score_per_turn"]}</div>
-              <div style='font-size: 0.7rem; color: #94a3b8;'>PROMEDIO GESTIÓN</div>
+              <div style='font-size: 0.7rem; color: {text_label};'>PROMEDIO GESTIÓN</div>
             </div>
             <div>
               <div style='font-size: 1.5rem; font-weight: 800; color: { "#10b981" if summary["delta_score"] >= 0 else "#ef4444" };'>
                 { "+" if summary["delta_score"] >= 0 else "" }{summary["delta_score"]}
               </div>
-              <div style='font-size: 0.7rem; color: #94a3b8;'>DELTA SCORE</div>
+              <div style='font-size: 0.7rem; color: {text_label};'>DELTA SCORE</div>
             </div>
           </div>
-          <hr style='border-color: #1e293b; margin: 12px 0;'>
+          <hr style='border-color: {hr_color}; margin: 12px 0;'>
           <div style='display: grid; grid-template-columns: 1fr 1fr; gap: 10px;'>
             <div>
-              <div style='font-size: 0.75rem; color: #64748b;'>HITO MÁS ALTO</div>
+              <div style='font-size: 0.75rem; color: {text_label};'>HITO MÁS ALTO</div>
               <div style='font-size: 0.85rem; font-weight: 700; color: #10b981;'>Semestre {best_idx} ({int(best_score)} pts)</div>
             </div>
             <div>
-              <div style='font-size: 0.75rem; color: #64748b;'>HITO MÁS BAJO</div>
+              <div style='font-size: 0.75rem; color: {text_label};'>HITO MÁS BAJO</div>
               <div style='font-size: 0.85rem; font-weight: 700; color: #ef4444;'>Semestre {worst_idx} ({int(worst_score)} pts)</div>
             </div>
           </div>
-          <hr style='border-color: #1e293b; margin: 12px 0;'>
-          <div style='font-size: 0.75rem; color: #64748b;'>EVENTOS DISPARADOS</div>
-          <div style='font-size: 0.9rem; font-weight: 700; color: #cbd5e1; margin-top: 2px;'>
+          <hr style='border-color: {hr_color}; margin: 12px 0;'>
+          <div style='font-size: 0.75rem; color: {text_label};'>EVENTOS DISPARADOS</div>
+          <div style='font-size: 0.9rem; font-weight: 700; color: {text_value}; margin-top: 2px;'>
             Total: {len(unique_events)} disparados ({endogenous_count} endógenos, {exogenous_count} exógenos)
           </div>
         </div>
@@ -531,10 +575,10 @@ def render_endgame_screen(mgr: SimStateManagerV2) -> None:
         
     with col_right:
         # --- SPIDER CHART ---
-        st.markdown("""
-        <div style='background-color: #111827; border: 1px solid #1e293b; border-radius: 8px; padding: 18px; text-align: center;'>
-          <h4 style='margin-top:0; margin-bottom: 5px; color: #cbd5e1; font-size: 1rem;'>🕷️ Spider Chart de Desempeño</h4>
-          <span style='font-size: 0.75rem; color: #64748b; display: block; margin-bottom: 10px;'>Mide el área de tu gestión (verde) vs. la base original heredada (rojo)</span>
+        st.markdown(f"""
+        <div style='background-color: {bg_card}; border: 1px solid {border_card}; border-radius: 8px; padding: 18px; text-align: center;'>
+          <h4 style='margin-top:0; margin-bottom: 5px; color: {text_title}; font-size: 1rem;'>🕷️ Spider Chart de Desempeño</h4>
+          <span style='font-size: 0.75rem; color: {text_label}; display: block; margin-bottom: 10px;'>Mide el área de tu gestión (verde) vs. la base original heredada (rojo)</span>
         """, unsafe_allow_html=True)
         
         spider_fig = plot_endgame_spider(snap_0, snap_f, history)
@@ -587,17 +631,11 @@ def render_endgame_screen(mgr: SimStateManagerV2) -> None:
     
     # --- CONTROLES DE REPORTE Y NUEVA PARTIDA ---
     st.divider()
-    col_restart, col_download = st.columns([1, 1])
-    
-    with col_restart:
-        if st.button("🔄 Comenzar Nueva Partida (Reset)", type="primary", use_container_width=True):
-            mgr.reset()
-            st.rerun()
-            
+    col_download, _ = st.columns([1, 1])
     with col_download:
         if FPDF_SUPPORTED:
             # Generar reporte PDF real en memoria
-            pdf_data = generate_pdf_report(summary, history, scenario_name, regime, difficulty)
+            pdf_data = generate_pdf_report(summary, history, scenario_name, regime, difficulty, scenario_id)
             st.download_button(
                 label="📄 Descargar Reporte Formal (PDF)",
                 data=bytes(pdf_data),
@@ -616,9 +654,9 @@ def render_endgame_screen(mgr: SimStateManagerV2) -> None:
 - **Score Total:** {summary['total_score']} / 1000
 - **Promedio Gestión:** {summary['avg_score_per_turn']} / 100
 - **Delta Gestión:** {'+' if summary['delta_score'] >= 0 else ''}{summary['delta_score']}
-
+ 
 ## Veredicto de la Gestión
-"{get_custom_narrative(summary, snap_f, snap_0)}"
+"{get_custom_narrative(summary, snap_f, snap_0, scenario_id)}"
 
 ## Resultados Comparativos
 - PIB Final: {snap_f['Y']:.2f} MM (Línea base: {snap_0['Y']:.2f} MM)
@@ -634,3 +672,142 @@ def render_endgame_screen(mgr: SimStateManagerV2) -> None:
                 mime="text/markdown",
                 use_container_width=True
             )
+
+    # ── AJUSTE V3.10: FORZAR TABLA DEBUG EN PANTALLA DE FIN DE JUEGO (F-29) ──────
+    if state.get("status") == "game_over" or mgr.status == "game_over":
+        st.divider()
+        with st.expander("🔍 Ver Matriz Técnica de Auditoría Ex-Post", expanded=False):
+            st.markdown("### 🔍 Inspección Técnica y Consistencia de Datos (Debug)")
+            st.markdown("<p style='font-size: 0.85rem; color: #64748b; margin-top:-10px;'>Auditoría intertemporal completa del equilibrio macroeconómico.</p>", unsafe_allow_html=True)
+            
+            debug_rows = []
+            sp = state.get("structural", {})
+            
+            for i, snap in enumerate(history):
+                t = snap.get("t", 0)
+                pol = snap.get("policy_applied", {})
+                
+                # 1. Políticas Exógenas (Sliders)
+                G_c = pol.get("G_c", snap.get("G_c", 15.0))
+                I_g = pol.get("I_g", snap.get("I_g", 5.0))
+                t_c = pol.get("t_c", snap.get("t_c", 0.20))
+                t_k = pol.get("t_k", snap.get("t_k", 0.20))
+                M = snap.get("M", pol.get("M", 40.0))
+                E = snap.get("E", pol.get("E", 10.0))
+                theta = pol.get("theta", 0.10)
+                tau = pol.get("tau", 0.0)
+                k_c = pol.get("k_c", 0.0)
+                Tr = pol.get("Tr", 0.0)
+                regime = pol.get("regime", snap.get("regime", "fixed"))
+                
+                # 2. Parámetros del Motor
+                k_m = snap.get("mult", 1.5)
+                rho = snap.get("rho", 0.0)
+                velocity_penalty = snap.get("velocity_penalty", 1.0)
+                f_eff = max(sp.get("f", 10.0) * (1.0 - k_c), 1e-4)
+                
+                x0 = sp.get("x0", 0.0)
+                x1 = sp.get("x1", 0.0)
+                Y_star = sp.get("Y_star", 0.0)
+                m0 = sp.get("m0", 0.0)
+                use_disaggregated = (x0 != 0.0 or m0 != 0.0 or x1 != 0.0 or Y_star != 0.0)
+                ml_ok = (sp.get("epsilon_x", 0.5) + sp.get("epsilon_m", 0.5)) > 1.0
+                j_curve_active = snap.get("j_curve_active", False)
+                if use_disaggregated:
+                    if j_curve_active:
+                        eps_x_eff = 0.10
+                        eps_m_eff = 0.10
+                    elif ml_ok:
+                        eps_x_eff = sp.get("epsilon_x", 0.5)
+                        eps_m_eff = sp.get("epsilon_m", 0.5)
+                    else:
+                        eps_x_eff = -(sp.get("epsilon_m", 0.5) - sp.get("epsilon_x", 0.5))
+                        eps_m_eff = sp.get("epsilon_m", 0.5)
+                else:
+                    if j_curve_active:
+                        eps_eff = 0.10
+                    elif ml_ok:
+                        eps_eff = sp.get("epsilon_x", 0.5)
+                    else:
+                        eps_eff = -(sp.get("epsilon_m", 0.5) - sp.get("epsilon_x", 0.5))
+                    eps_x_eff = eps_eff
+                    eps_m_eff = sp.get("epsilon_m", 0.5)
+                    
+                G_total = G_c + I_g
+                if use_disaggregated:
+                    NX0_eff = x0 + x1 * Y_star - m0
+                else:
+                    NX0_eff = sp.get("NX0", 0.0)
+                rho_k = sp.get("rho_k", 0.0)
+                A_auto = sp.get("c0", 50.0) + sp.get("c1", 0.6) * Tr + sp.get("I0", 15.0) - rho_k * t_k + G_total + NX0_eff
+                
+                # 3. Resultados
+                Y = snap.get("Y", 100.0)
+                gap = snap.get("gap", 0.0)
+                Y_pot = Y / (1.0 + gap) if abs(gap + 1.0) > 1e-5 else 100.0
+                U = snap.get("U", 0.05)
+                pi = snap.get("pi", 0.03)
+                
+                if i == 0:
+                    pi_core = pi
+                else:
+                    prev_snap = history[i - 1]
+                    E_prev = prev_snap.get("E", 10.0)
+                    E_curr = snap.get("E", 10.0)
+                    devaluation_rate = (E_curr - E_prev) / max(E_prev, 1e-9)
+                    beta_PT = sp.get("beta_PT", 0.4)
+                    pi_core = max(-0.015, pi - beta_PT * devaluation_rate)
+                    
+                R = snap.get("R", 50.0)
+                B = snap.get("B", 0.0)
+                NX = snap.get("NX", 0.0)
+                
+                CF = snap.get("capital_flows_eq", 0.0)
+                
+                s_x = pol.get("s_x", snap.get("s_x", 0.0))
+                gY = snap.get("gY", 0.0)
+                r_rate = snap.get("r", 5.0)
+                P_local = snap.get("P_local", 4.60)
+                score = snap.get("score", 90.0)
+                events = snap.get("events_triggered", [])
+                events_str = ", ".join(events) if events else "--"
+                
+                # Ratios
+                B_Y = B / Y if Y > 0 else 0.0
+                nom_GDP = Y * P_local
+                R_nomGDP = R / nom_GDP if nom_GDP > 0 else 0.0
+
+                debug_rows.append({
+                    "t": f"T{t}",
+                    "Regimen": regime.upper(),
+                    "G_c": round(G_c, 2),
+                    "I_g": round(I_g, 2),
+                    "t_c": f"{t_c*100:.1f}%",
+                    "t_k": f"{t_k*100:.1f}%",
+                    "Tr": round(Tr, 2),
+                    "M": round(M, 2) if regime == "flexible" else f"{round(M, 2)} (Endógena)",
+                    "E": round(E, 2),
+                    "theta": f"{theta*100:.1f}%",
+                    "tau": f"{tau*100:.1f}%",
+                    "s_x": f"{s_x*100:.1f}%",
+                    "k_c": f"{k_c*100:.1f}%",
+                    "Y": round(Y, 2),
+                    "Y_pot": round(Y_pot, 2),
+                    "Gap(%)": f"{gap*100:.2f}%",
+                    "U(%)": f"{U*100:.2f}%",
+                    "pi(%)": f"{pi*100:.2f}%",
+                    "gY(%)": f"{gY*100:.2f}%",
+                    "r": round(r_rate, 2),
+                    "B": round(B, 2),
+                    "R": round(R, 2),
+                    "NX": round(NX, 2),
+                    "P_local": round(P_local, 4),
+                    "B/Y": round(B_Y, 3),
+                    "R/nomGDP": round(R_nomGDP, 4),
+                    "Score": round(score, 2),
+                    "Eventos": events_str
+                })
+                
+            df_debug = pd.DataFrame(debug_rows)
+            st.dataframe(df_debug, use_container_width=True, hide_index=True)
+

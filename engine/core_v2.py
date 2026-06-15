@@ -37,6 +37,7 @@ from config.parameters_v2 import (
     SalterSwanResult,
     StructuralParams,
 )
+from engine.monetary_rule import apply_taylor_rule, compute_implied_M
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -136,26 +137,72 @@ def compute_autonomous_demand(
     return c0 + c1 * Tr + I0 - rho_k * t_k - b * r + G_total + NX0
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# REFORMA 1B: PASS-THROUGH CAMBIARIO GRADUAL (V3.0)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_passthrough_E(
+    E_t: float,
+    E_t1: float,
+    E_t2: float,
+    weights: tuple[float, float, float] = (0.40, 0.35, 0.25),
+) -> float:
+    """
+    Tipo de cambio efectivo para el pass-through a precios (media ponderada).
+
+    E_efectivo = w0*E_t + w1*E_{t-1} + w2*E_{t-2}
+
+    Modela la inercia del traspaso cambiario: los importadores agotan
+    inventarios viejos antes de actualizar sus listas de precios.
+    Retrasa la transmisión completa del shock cambiario en ~2 períodos.
+
+    Pesos calibrados por la literatura empírica de pass-through en emergentes
+    (Campa & Goldberg, 2002):
+      w0 = 0.40 — efecto del período actual (40%)
+      w1 = 0.35 — efecto del período anterior (35%)
+      w2 = 0.25 — efecto de dos períodos atrás (25%)
+
+    Parameters
+    ----------
+    E_t  : Tipo de cambio nominal actual
+    E_t1 : Tipo de cambio del período anterior (t-1)
+    E_t2 : Tipo de cambio de dos períodos atrás (t-2)
+    weights : Pesos de la media ponderada (suman 1.0)
+
+    Returns
+    -------
+    float : Tipo de cambio efectivo para el cálculo de P_T y P_local
+    """
+    w0, w1, w2 = weights
+    return w0 * E_t + w1 * E_t1 + w2 * E_t2
+
+
 def compute_price_level(
     E: float,
     P_star: float,
     P_NT: float,
     alpha_PT: float,
     tau: float = 0.0,
+    E_eff: Optional[float] = None,
 ) -> float:
     """
     Nivel de precios doméstico general (ponderación de transables y no transables).
 
-    P_T = E · P* · (1 + τ)
+    P_T = E_eff · P* · (1 + τ)        [usa E_eff para pass-through gradual]
     P_local = α_PT · P_T + (1 - α_PT) · P_NT
+
+    V3.0 [Reforma 1B]: acepta E_eff (tipo de cambio efectivo promediado).
+    Si E_eff is None, usa E (comportamiento V2.0 exacto).
+    El TCR siempre se calcula con E nominal real, no con E_eff.
 
     Parameters
     ----------
-    E       : Tipo de cambio nominal
+    E       : Tipo de cambio nominal real (para referencia)
     P_star  : Nivel de precios externo (base = 1.0)
     P_NT    : Precio de bienes no-transables (variable de estado)
     alpha_PT: Peso bienes transables en la canasta de precios ∈ [0,1]
     tau     : Arancel a importaciones ∈ [0,1); default 0.0
+    E_eff   : Tipo de cambio efectivo pass-through (V3.0); None = usa E (V2.0)
 
     Returns
     -------
@@ -163,7 +210,8 @@ def compute_price_level(
     """
     if not (0.0 <= alpha_PT <= 1.0):
         raise ValueError(f"alpha_PT debe estar en [0,1], recibido: {alpha_PT}")
-    P_T = E * P_star * (1.0 + tau)
+    E_for_prices = E_eff if E_eff is not None else E
+    P_T = E_for_prices * P_star * (1.0 + tau)
     return alpha_PT * P_T + (1.0 - alpha_PT) * P_NT
 
 
@@ -208,17 +256,10 @@ def compute_sectoral_composition(
 ) -> tuple[float, float, float]:
     """
     Calcula la composición sectorial del PIB entre Transables (Y_T) y No-Transables (Y_NT).
-
-    q_int = P_T / P_NT
-    share_T = max(0.05, min(0.95, alpha_PT * q_int))
-    Y_T = Y * share_T
-    Y_NT = Y * (1.0 - share_T)
-
-    Returns
-    -------
-    tuple[float, float, float]
-        (q_int, Y_T, Y_NT)
+    Ponderado estrictamente para que, a q_int = 1.0 (estado estacionario t=0), el sector
+    transable sea exactamente el 40% y el no transable sea el 60% del producto.
     """
+    alpha_PT = 0.40
     q_int = P_T / P_NT if P_NT > 0.0 else 0.0
     share_T = max(0.05, min(0.95, alpha_PT * q_int))
     Y_T = Y * share_T
@@ -374,7 +415,7 @@ def compute_bp_curve(
     if f <= 0.0:
         raise ValueError(f"Parámetro f debe ser positivo, recibido: {f}")
     slope_correction = NX / f
-    return r_star + delta_E_expected + rho - slope_correction
+    return r_star + delta_E_expected + rho * 100.0 - slope_correction
 
 
 def is_curve_v2(
@@ -453,6 +494,9 @@ def eq_fixed_v2(
     j_curve_active: bool = False,
     rho: float = 0.0,  # FASE 3.1
     velocity_penalty: float = 1.0,
+    pi_e: float = 0.03,  # V3.5: expectativa de inflación previa para tasa real
+    r_prev: Optional[float] = None, # V3.6
+    Y_prev: Optional[float] = None, # V3.8
 ) -> EquilibriumV2:
     """
     Equilibrio IS-LM-BP bajo Tipo de Cambio FIJO (V2.1).
@@ -514,8 +558,8 @@ def eq_fixed_v2(
     k_m = compute_multiplier(sp["c1"], t_c, sp["m1"], tau)
     slope = 1.0 - sp["c1"] * (1.0 - t_c) + sp["m1"] * (1.0 - tau)  # = 1/k_m
 
-    # Movilidad de capitales efectiva (controles reducen flujo)
-    f_eff = max(sp["f"] * (1.0 - k_c), 1e-4)
+    # Movilidad de capitales efectiva inicial (asumiendo entrada neta de capitales: sin cepo)
+    f_inflow = max(sp["f"], 1e-4)
 
     # Componente autónomo y elasticidad efectiva según modo desagregado vs legacy
     x0 = sp.get("x0", 0.0)
@@ -549,38 +593,95 @@ def eq_fixed_v2(
         eps_eff_sx = eps_eff * (1.0 + s_x)
 
     # Componente autónomo (sin término de r; se separa para el sistema lineal)
+    # V3.0 Reforma 4B: si lambda_h > 0, aplicar inercia del consumo a c0
+    lambda_h = sp.get("lambda_h", 0.0)
+    C_prev   = pi.get("_C_prev", 0.0)  # Pasado internamente por state_manager
+    c0_eff   = lambda_h * C_prev + (1.0 - lambda_h) * sp["c0"] if (lambda_h > 0 and C_prev > 0) else sp["c0"]
+
+    # V3.0 Reforma 4A: crowding-in/out ya calculado externamente como delta_I0
+    delta_I0 = pi.get("_delta_I0", 0.0)
+
+    # V3.5: Suavizar la tasa real esperada acotando la deflación esperada a un piso de -2%
+    pi_e_clamped = max(-0.02, pi_e)
+
     A_auto = sp["c0"] + sp["c1"] * Tr + sp["I0"] - rho_k * t_k + G_total + NX0_eff
+    # Sumamos sp["b"] * pi_e_clamped * 100.0 para reflejar el canal de tasa real en la inversión privada
+    A_autonomo_neto = (A_auto - sp["c0"]) + c0_eff + delta_I0 + sp.get("b", 1.0) * pi_e_clamped * 100.0
 
     # ── 3. Sistema 2×2: IS y BP simultáneas (Y, r) ───────────────────────────
     m1_eff = sp["m1"] * (1.0 - tau)  # propensión marginal a importar efectiva
-    rhs_bp = (
-        r_star + delta_E_expected + rho
-        - NX0_eff / f_eff
-        - eps_eff_sx * q / f_eff
+    rhs_bp_inflow = (
+        r_star + delta_E_expected * 100.0 + rho * 100.0
+        - NX0_eff / f_inflow
+        - eps_eff_sx * q / f_inflow
     )
 
-    A_mat = np.array([
+    A_mat_inflow = np.array([
         [1.0,              sp["b"] * k_m],
-        [-m1_eff / f_eff,  1.0          ],
+        [-m1_eff / f_inflow,  1.0          ],
     ])
-    b_vec = np.array([
-        k_m * (A_auto + eps_eff_sx * q),
-        rhs_bp,
+    b_vec_inflow = np.array([
+        k_m * (A_autonomo_neto + eps_eff_sx * q),
+        rhs_bp_inflow,
     ])
 
+    f_eff = f_inflow
     try:
-        sol = np.linalg.solve(A_mat, b_vec)
+        sol = np.linalg.solve(A_mat_inflow, b_vec_inflow)
         Y, r = float(sol[0]), float(sol[1])
+        
+        # Evaluar el signo del flujo neto de capitales financieros
+        parity = r_star + delta_E_expected * 100.0 + rho * 100.0
+        if r < parity:
+            # Flujo negativo (salida/fuga de dólares): se activa el cepo (1.0 - k_c)
+            f_outflow = max(sp["f"] * (1.0 - k_c), 1e-4)
+            f_eff = f_outflow
+            A_mat_outflow = np.array([
+                [1.0,                    sp["b"] * k_m],
+                [-m1_eff / f_outflow,   1.0          ],
+            ])
+            rhs_bp_outflow = (
+                r_star + delta_E_expected * 100.0 + rho * 100.0
+                - NX0_eff / f_outflow
+                - eps_eff_sx * q / f_outflow
+            )
+            b_vec_outflow = np.array([
+                k_m * (A_autonomo_neto + eps_eff_sx * q),
+                rhs_bp_outflow,
+            ])
+            sol_outflow = np.linalg.solve(A_mat_outflow, b_vec_outflow)
+            Y, r = float(sol_outflow[0]), float(sol_outflow[1])
     except np.linalg.LinAlgError:
         # Sistema singular: recurrir a solución simplificada r = r* + ΔEₑ + ρ
-        r = r_star + delta_E_expected + rho
-        Y = k_m * (A_auto + eps_eff_sx * q - sp["b"] * r)
+        r = r_star + delta_E_expected * 100.0 + rho * 100.0
+        Y = k_m * (A_autonomo_neto + eps_eff_sx * q - sp["b"] * r)
 
+    # Suavizado intertemporal de la tasa de interés de mercado (V3.6)
+    if r_prev is not None:
+        r_unconstrained = r
+        # Damping fuerte: 70% inercia, 30% nuevo equilibrio para evitar saltos bruscos
+        r = 0.70 * r_prev + 0.30 * r_unconstrained
+        # Recalcular Y con la tasa suavizada para mantener la identidad macroeconómica
+        Y = k_m * (A_autonomo_neto + eps_eff_sx * q - sp["b"] * r)
+
+    Y_solved = Y
+    # Suavizado intertemporal del PIB real (inercia industrial V4.2)
+    # 75% valor resuelto, 25% turno anterior → convergencia más rápida con amortiguación suficiente
+    if Y_prev is not None:
+        Y = 0.75 * Y + 0.25 * Y_prev
     Y = max(10.0, Y)
 
-    # ── 4. M endógena (LM) ───────────────────────────────────────────────────
+    # ── 4. M endógena (LM) con esterilización V3.0 (Reforma 2B) ──────────────
     M_real_eq = (sp["k"] * Y - sp["h"] * r) / velocity_penalty
-    M_endo = M_real_eq * P_local
+    # psi_s = 0 (default): sin esterilización → M_endo es la solución LM directa.
+    # psi_s > 0: el BC emite bonos para esterilizar las compras de divisas,
+    #   reduciendo el multiplicador monetario efectivo proporcionalmente.
+    psi_s = pi.get("psi_s", 0.0)
+    if psi_s > 0.0:
+        M_real_eq = M_real_eq * (1.0 - 0.5 * psi_s)
+    M_real_eq = max(1e-6, M_real_eq)
+    M_endo = max(1e-4, M_real_eq * P_local)
+
 
     # ── 5. Variables derivadas ────────────────────────────────────────────────
     NX, X, M_imp = compute_NX(
@@ -590,8 +691,15 @@ def eq_fixed_v2(
         Y_star=sp.get("Y_star", 0.0), m0=sp.get("m0", 0.0),
         tau=tau, s_x=s_x,
     )
-    C     = sp["c0"] + sp["c1"] * (Y * (1.0 - t_c) + Tr)
-    I_inv = sp["I0"] - sp["b"] * r - rho_k * t_k
+    NX_prev = pi.get("_NX_prev")
+    if NX_prev is not None:
+        NX = 0.70 * NX + 0.30 * NX_prev
+    C     = c0_eff + sp["c1"] * (Y * (1.0 - t_c) + Tr)
+    # V3.8: Si hay inercia en Y o se aplicó floor, forzar consistencia de la identidad macroeconómica en la inversión
+    if Y_prev is not None or abs(Y - Y_solved) > 1e-6:
+        I_inv = Y - C - G_total - NX
+    else:
+        I_inv = sp["I0"] + delta_I0 - sp["b"] * (r - pi_e_clamped * 100.0) - rho_k * t_k
     mult  = k_m
     gap   = (Y - Y_pot) / Y_pot if Y_pot > 0 else 0.0
     A_dom = C + I_inv + G_total   # Absorción doméstica (SIN NX)
@@ -631,6 +739,7 @@ def eq_fixed_v2(
         q_int=round(q_int, 6),
         Y_T=round(Y_T, 6),
         Y_NT=round(Y_NT, 6),
+        FX_intervention=0.0,  # Fijo: sin intervención cambiaria endógena
     )
 
 
@@ -647,41 +756,45 @@ def eq_flexible_v2(
     delta_E_external: float = 0.0,
     max_iter: int = 200,
     tol: float = 1e-6,
-    rho: float = 0.0,  # FASE 3.1
+    rho: float = 0.0,
     velocity_penalty: float = 1.0,
+    # V3.0 Reforma 1B: pass-through gradual
+    E_eff: Optional[float] = None,
+    # V3.0 Reforma 1A: bandas dinámicas PPP
+    pi_local_prev: float = 0.0,
+    pi_star: float = 0.03,
 ) -> EquilibriumV2:
     """
-    Equilibrio IS-LM-BP bajo Tipo de Cambio FLEXIBLE (V2.1).
+    Equilibrio IS-LM-BP bajo Tipo de Cambio FLEXIBLE (V3.0).
 
-    Bajo TC flexible:
-    - M es exógena (instrumento del banco central).
-    - E se determina endógenamente para limpiar el mercado externo.
-
-    V2.1 incorpora: G_c+I_g=G_total, Tr, t_c, t_k, rho_k, tau, s_x, k_c.
-    La dependencia circular E → P_local → M_real → (Y, r) → NX → E
-    se resuelve iterativamente con criterio de convergencia |ΔE| < tol.
+    V3.0 incorpora:
+    - Reforma 2A: Modo rate_targeting (LM horizontal en r = r_ref).
+    - Reforma 1A: Bandas cambiarias dinámicas basadas en PPP e UIP.
+    - Reforma 1B: Pass-through gradual con E_eff ponderado.
+    - Reforma 4A/4B: inercia del consumo y crowding effects.
 
     Parameters
     ----------
     sp               : Parámetros estructurales
     pi               : Instrumentos de política
     Y_pot            : PIB potencial actual
-    P_NT             : Precio de no-transables (estado)
-    E_prev           : Tipo de cambio del período anterior (punto inicial)
-    Y_prev           : Y del período anterior (punto inicial; opcional)
-    r_prev           : r del período anterior (punto inicial; opcional)
-    E_guess          : Estimación inicial de E_endo (sobrescribe E_prev si se provee)
+    P_NT             : Precio de no-transables
+    E_prev           : Tipo de cambio del período anterior
+    Y_prev, r_prev   : Puntos iniciales opcionales
+    E_guess          : Estimación inicial de E_endo
     j_curve_active   : Flag de efecto J-curve
-    delta_E_external : Prima de devaluación exógena (e.g. 0.25 en crisis de
-                       credibilidad). Se suma al delta_E endógeno en la BP.
-    max_iter         : Máximo de iteraciones del loop externo
-    tol              : Criterio de convergencia en E
-    rho              : Prima de riesgo soberano (riesgo país)
+    delta_E_external : Prima de devaluación exógena
+    max_iter, tol    : Parámetros de convergencia
+    rho              : Prima de riesgo soberano
+    E_eff            : TC efectivo pass-through (V3.0 Reforma 1B)
+    pi_local_prev    : Inflación local previa para banda PPP (V3.0 Reforma 1A)
+    pi_star          : Inflación externa de referencia (V3.0 Reforma 1A)
 
     Returns
     -------
     EquilibriumV2
     """
+    monetary_mode = pi.get("monetary_mode", "quantity")
     M      = pi["M"]
     r_star = pi["r_star"]
     P_star = sp["P_star"]
@@ -737,8 +850,22 @@ def eq_flexible_v2(
             eps_eff = -(sp["epsilon_m"] - sp["epsilon_x"])
         eps_eff_sx = eps_eff * (1.0 + s_x)
 
-    # Demanda autónoma (sin el término -b*r)
+    # V3.0 Reforma 4B/4A: inercia del consumo y crowding effects
+    lambda_h = sp.get("lambda_h", 0.0)
+    C_prev_flex = pi.get("_C_prev", 0.0)
+    c0_eff_flex = (lambda_h * C_prev_flex + (1.0 - lambda_h) * sp["c0"]
+                   if (lambda_h > 0 and C_prev_flex > 0) else sp["c0"])
+    delta_I0_flex = pi.get("_delta_I0", 0.0)
+
+    # V3.5: Suavizar la tasa real esperada acotando la deflación esperada a un piso de -2%
+    pi_e_clamped = max(-0.02, pi_local_prev)
+
+    # Demanda autónoma base estática (sin el término -b*r, contiene sp["c0"])
     A_auto_base = sp["c0"] + sp["c1"] * Tr + sp["I0"] - rho_k * t_k + G_total + NX0_eff
+
+    # El término autónomo real neto remueve el c0 viejo para evitar la doble contabilidad
+    # Sumamos sp["b"] * pi_e_clamped * 100.0 para reflejar la tasa de interés real
+    A_autonomo_neto = (A_auto_base - sp["c0"]) + c0_eff_flex + delta_I0_flex + sp.get("b", 1.0) * pi_e_clamped * 100.0
 
     # Punto inicial de E
     E_current = E_guess if E_guess is not None else E_prev
@@ -774,14 +901,25 @@ def eq_flexible_v2(
                 tau=tau, s_x=s_x,
             )
 
-            delta_E_e = (E_s_safe - E_prev) / max(E_prev, 1e-9) + delta_E_external
+            # Convertir delta_E_e a puntos porcentuales para que sea consistente con r_star y rho
+            delta_E_e_pct = ((E_s_safe - E_prev) / max(E_prev, 1e-9)) * 100.0 + (delta_E_external * 100.0)
 
-            # IS: Y = k_m · (A_auto_base - b·r + eps_eff_sx·q)
-            eq_IS = Y_s - k_m * (A_auto_base - sp["b"] * r_s + eps_eff_sx * q_s)
-            # LM: r = (k·Y - M_real / velocity_penalty) / h
-            eq_LM = r_s - (sp["k"] * Y_s - M_real_s / velocity_penalty) / sp["h"]
-            # BP: r = r* + ΔEₑ + ρ - NX/f_eff
-            eq_BP = r_s - compute_bp_curve(r_star, delta_E_e, NX_s, f_eff, rho=rho)
+            # IS: Y = k_m · (A_autonomo_neto - b·r + eps_eff_sx·q)
+            eq_IS = Y_s - k_m * (A_autonomo_neto - sp["b"] * r_s + eps_eff_sx * q_s)
+            # LM: r = r_ref under rate_targeting, otherwise r = (k·Y - M_real / velocity_penalty) / h
+            if monetary_mode == "rate_targeting":
+                r_ref_val = pi.get("r_ref", r_star)
+                eq_LM = r_s - r_ref_val
+            else:
+                eq_LM = r_s - (sp["k"] * Y_s - M_real_s / velocity_penalty) / sp["h"]
+            # Evaluar asimetría de cepo: si r_s < parity (salida/fuga), aplicar (1 - k_c), si no 1.0 (entrada libre)
+            parity = r_star + delta_E_e_pct + rho * 100.0
+            if r_s < parity:
+                f_s = max(sp["f"] * (1.0 - k_c), 1e-4)
+            else:
+                f_s = max(sp["f"], 1e-4)
+            # BP: r = r* + ΔEₑ + ρ - NX/f_s
+            eq_BP = r_s - compute_bp_curve(r_star, delta_E_e_pct, NX_s, f_s, rho=rho)
             return [eq_IS, eq_LM, eq_BP]
 
         from scipy.optimize import least_squares
@@ -802,16 +940,47 @@ def eq_flexible_v2(
             r_new = max(0.1, min(100.0, float(sol_f[1])))
             E_new = max(1e-4, min(100.0, float(sol_f[2])))
 
-        # Criterio de convergencia en E
-        if abs(E_new - E_current) < tol:
-            E_current = E_new
+        if r_prev is not None:
+            max_jump = 4.0 # 400 puntos básicos máximo por turno
+            r_new = r_prev + max(-max_jump, min(max_jump, r_new - r_prev))
+
+        # ── REFORMA 1A V3.0: Bandas dinámicas basadas en PPP + UIP ──────────────
+        # PPP: el TC fundamental ajusta por diferencial de inflación
+        E_ppp = E_prev * (1.0 + pi_local_prev - pi_star)
+        # UIP: ajuste por diferencial de tasas
+        r_prev_safe = r_prev if r_prev is not None else r_star
+        E_uip = E_prev * (1.0 + (r_prev_safe - r_star) / 100.0)
+        E_fundamental = 0.6 * E_ppp + 0.4 * E_uip
+        # Banda: ±20% alrededor del fundamental (vs ±50%/100% estático previo)
+        band_lo = max(0.5 * E_prev, E_fundamental * 0.80)
+        band_hi = min(2.0 * E_prev, E_fundamental * 1.20)
+
+        E_new_bounded = max(band_lo, min(band_hi, E_new))
+
+        # Intervención cambiaria esterilizada (Reforma 1A)
+        fx_intervention_this_iter = max(0.0, E_prev - E_new) * 0.5 if E_new < band_lo else 0.0
+
+        # Damping: mover solo 40% hacia la nueva solución (suaviza la convergencia circular)
+        damping = 0.4
+        E_next = E_current + damping * (E_new_bounded - E_current)
+        
+        # Criterio de convergencia
+        if abs(E_next - E_current) < tol:
+            E_current = E_next
             break
-        E_current = E_new
+        E_current = E_next
 
     # Calcular valores finales con E convergido
-    P_local_f = compute_price_level(E_current, P_star, P_NT, sp["alpha_PT"], tau=tau)
+    # V3.0 Reforma 1B: usar E_eff para pass-through si está disponible
+    P_local_f = compute_price_level(E_current, P_star, P_NT, sp["alpha_PT"], tau=tau, E_eff=E_eff)
     q_f       = compute_real_exchange_rate(E_current, P_star, P_local_f)
     M_real_f  = (M / P_local_f) / velocity_penalty
+
+    Y_new_solved = Y_new
+    # Suavizado intertemporal del PIB real (inercia industrial V3.8)
+    if Y_prev is not None:
+        Y_new = 0.75 * Y_new + 0.25 * Y_prev  # V4.2: 75/25 amortiguador
+    Y_new = max(10.0, Y_new)
 
     NX, X, M_imp = compute_NX(
         sp["NX0"], sp["epsilon_x"], sp["epsilon_m"],
@@ -820,22 +989,35 @@ def eq_flexible_v2(
         Y_star=sp.get("Y_star", 0.0), m0=sp.get("m0", 0.0),
         tau=tau, s_x=s_x,
     )
-    C     = sp["c0"] + sp["c1"] * (Y_new * (1.0 - t_c) + Tr)
-    I_inv = sp["I0"] - sp["b"] * r_new - rho_k * t_k
-    gap   = (Y_new - Y_pot) / Y_pot if Y_pot > 0 else 0.0
-    A_dom = C + I_inv + G_total   # Absorción doméstica (SIN NX)
+    NX_prev = pi.get("_NX_prev")
+    if NX_prev is not None:
+        NX = 0.70 * NX + 0.30 * NX_prev
 
-    # Economía Dual (FASE 3.1)
+    # V3.0 Reforma 2A: bajo rate_targeting, M_endo es la M implícita
+    if monetary_mode == "rate_targeting":
+        r_ref_val = pi.get("r_ref") or r_new
+        M_snap_final = compute_implied_M(r_ref_val, Y_new, sp["k"], sp["h"], P_local_f, velocity_penalty)
+        M_snap_final = max(1e-4, M_snap_final)
+    else:
+        M_snap_final = float("nan")  # M es exógena bajo quantity mode
+
+    C     = c0_eff_flex + sp["c1"] * (Y_new * (1.0 - t_c) + Tr)
+    # V3.8: Si hay inercia en Y o se aplicó floor, forzar consistencia de la identidad macroeconómica en la inversión
+    if Y_prev is not None or abs(Y_new - Y_new_solved) > 1e-6:
+        I_inv = Y_new - C - G_total - NX
+    else:
+        I_inv = sp["I0"] + delta_I0_flex - sp["b"] * (r_new - pi_e_clamped * 100.0) - rho_k * t_k
+    gap   = (Y_new - Y_pot) / Y_pot if Y_pot > 0 else 0.0
+    A_dom = C + I_inv + G_total
+
     P_T = E_current * P_star * (1.0 + tau)
     q_int, Y_T, Y_NT = compute_sectoral_composition(Y_new, P_T, P_NT, sp["alpha_PT"])
 
-    # ── FIX F-01: Verificación de identidad macroeconómica Y = C+I+G+NX ─────
     _identity_gap = abs(Y_new - (A_dom + NX))
     if _identity_gap > 1e-3:
         _log.warning(
             "[eq_flexible_v2] Identidad Y = C+I+G+NX violada. "
-            "Y=%.6f, C+I+G+NX=%.6f, brecha=%.6f. "
-            "Revisar convergencia del solver o parámetros del escenario.",
+            "Y=%.6f, C+I+G+NX=%.6f, brecha=%.6f.",
             Y_new, A_dom + NX, _identity_gap,
         )
 
@@ -843,7 +1025,7 @@ def eq_flexible_v2(
         Y=round(Y_new, 6),
         r=round(r_new, 6),
         E_endo=round(E_current, 6),
-        M_endo=float("nan"),        # M es exógena bajo TC flexible
+        M_endo=round(M_snap_final, 6),
         NX=round(NX, 6),
         X=round(X, 6),
         M_imp=round(M_imp, 6),
@@ -860,6 +1042,7 @@ def eq_flexible_v2(
         q_int=round(q_int, 6),
         Y_T=round(Y_T, 6),
         Y_NT=round(Y_NT, 6),
+        FX_intervention=round(fx_intervention_this_iter, 6),
     )
 
 
@@ -873,6 +1056,9 @@ def eq_crawling_peg_v2(
     j_curve_active: bool = False,
     rho: float = 0.0,  # FASE 3.1
     velocity_penalty: float = 1.0,
+    pi_e: float = 0.03,  # V3.5: expectativa de inflación
+    r_prev: Optional[float] = None,
+    Y_prev: Optional[float] = None,
 ) -> EquilibriumV2:
     """
     Equilibrio IS-LM-BP bajo Crawling Peg (deslizamiento cambiario programado).
@@ -917,6 +1103,9 @@ def eq_crawling_peg_v2(
         j_curve_active=j_curve_active,
         rho=rho,  # FASE 3.1
         velocity_penalty=velocity_penalty,
+        pi_e=pi_e,
+        r_prev=r_prev,
+        Y_prev=Y_prev,
     )
 
     # Sobreescribir E_endo con el valor del crawl (para registro)
@@ -1070,9 +1259,13 @@ def solve_equilibrium_v2(
     r_prev: Optional[float] = None,
     j_curve_active: bool = False,
     delta_E_expected: float = 0.0,
-    rho: float = 0.0,  # FASE 3.1
-    prev_risk_penalty: float = 0.0,
+    rho: float = 0.0,
     prev_velocity_penalty: float = 1.0,
+    # V3.0 Reforma 1B: pass-through gradual
+    E_eff: Optional[float] = None,
+    # V3.0 Reforma 1A: bandas dinámicas PPP
+    pi_local_prev: float = 0.0,
+    pi_star: float = 0.03,
 ) -> EquilibriumV2:
     """
     Dispatcher: selecciona el solver según el régimen cambiario.
@@ -1091,8 +1284,8 @@ def solve_equilibrium_v2(
                         Bajo régimen fijo: se suma a r_BP.
                         Bajo flexible: se añade al delta_E endógeno en BP.
                         Bajo crawling peg: ignorado (usa crawl_rate).
-    rho               : Prima de riesgo soberano (riesgo país)
-    prev_risk_penalty : Penalización de riesgo del turno previo
+    rho               : Prima de riesgo soberano en puntos porcentuales (coherente con r_star).
+                        Calculado una sola vez por compute_sovereign_risk y escalado por el caller.
     prev_velocity_penalty : Penalización de velocidad de dinero previa
 
     Returns
@@ -1104,33 +1297,26 @@ def solve_equilibrium_v2(
     ValueError
          Si el régimen no es reconocido.
     """
-    # ── PENALIZACIÓN POR VALORES EXTREMOS (TAREA 6) ─────────────────────────
-    G_total = pi.get("G_c", pi.get("G", 20.0)) + pi.get("I_g", 0.0)
+    # ── INYECCIÓN DE GASTO FORZOSO POR DESASTRE NATURAL (F-18 FIX) ──────────
+    G_needed = sp.get("G_needed", 0.0)
+    if G_needed > 0.0:
+        pi = dict(pi)  # copia defensiva para no mutar el original
+        pi["G_c"] = pi.get("G_c", pi.get("G", 20.0)) + G_needed
+        pi["G"] = pi["G_c"] + pi.get("I_g", 0.0)
+
+    # ── PENALIZACIÓN DE VELOCIDAD MONETARIA (única de este módulo) ───────────
     M_val = pi.get("M", 40.0)
-    
-    new_risk_penalty = 0.0
     new_velocity_penalty_shock = 0.0
-    
-    # Sliders de gasto: G total desproporcionado (penalizaciones exponenciales)
-    if G_total > 30.0:
-        new_risk_penalty += 0.02 * (math.exp(0.4 * (G_total - 30.0)) - 1.0)
-    elif G_total < 5.0:
-        new_risk_penalty += 0.03 * (math.exp(0.5 * (5.0 - G_total)) - 1.0)
-        
-    # Oferta monetaria desproporcionada (penalizaciones exponenciales)
     if M_val > 120.0:
-        new_risk_penalty += 0.01 * (math.exp(0.2 * (M_val - 120.0)) - 1.0)
         new_velocity_penalty_shock += 0.05 * (math.exp(0.25 * (M_val - 120.0)) - 1.0)
     elif M_val < 15.0:
-        new_risk_penalty += 0.03 * (math.exp(0.4 * (15.0 - M_val)) - 1.0)
         new_velocity_penalty_shock += 0.05 * (math.exp(0.4 * (15.0 - M_val)) - 1.0)
 
-    # Inercia intertemporal: 0.6 * previo + 0.4 * nuevo
-    risk_penalty = 0.6 * prev_risk_penalty + 0.4 * new_risk_penalty
     velocity_penalty = 0.6 * prev_velocity_penalty + 0.4 * (1.0 + new_velocity_penalty_shock)
-        
-    rho = rho + risk_penalty * 100.0  # escala en puntos porcentuales para UIP
-    
+
+    # rho se usa directamente — ya contiene la prima de riesgo completa
+    # calculada por compute_sovereign_risk (fuente única de verdad).
+
     regime = pi.get("regime", "fixed")
 
     if regime == "fixed":
@@ -1141,6 +1327,9 @@ def solve_equilibrium_v2(
             j_curve_active=j_curve_active,
             rho=rho,  # FASE 3.1
             velocity_penalty=velocity_penalty,
+            pi_e=pi_local_prev, # V3.5
+            r_prev=r_prev, # V3.6
+            Y_prev=Y_prev, # V3.8
         )
 
     elif regime == "flexible":
@@ -1154,8 +1343,11 @@ def solve_equilibrium_v2(
             E_guess=E_guess_crisis,
             j_curve_active=j_curve_active,
             delta_E_external=delta_E_expected,
-            rho=rho,  # FASE 3.1
+            rho=rho,
             velocity_penalty=velocity_penalty,
+            E_eff=E_eff,              # V3.0 Reforma 1B
+            pi_local_prev=pi_local_prev,  # V3.0 Reforma 1A
+            pi_star=pi_star,          # V3.0 Reforma 1A
         )
 
     elif regime == "crawling_peg":
@@ -1168,6 +1360,9 @@ def solve_equilibrium_v2(
             j_curve_active=j_curve_active,
             rho=rho,  # FASE 3.1
             velocity_penalty=velocity_penalty,
+            pi_e=pi_local_prev, # V3.5
+            r_prev=r_prev,
+            Y_prev=Y_prev,
         )
 
     else:
@@ -1176,8 +1371,9 @@ def solve_equilibrium_v2(
             "Opciones: 'fixed', 'flexible', 'crawling_peg'."
         )
 
-    # Guardar penalizaciones en equilibrio para ser persistidas por el StateManager
+    # Guardar velocity_penalty en equilibrio para ser persistida por el StateManager
     eq_dict = dict(eq)
-    eq_dict["risk_penalty"] = risk_penalty
     eq_dict["velocity_penalty"] = velocity_penalty
+    # V3.0: asegurar FX_intervention existe con default 0 (retrocompat. fixed/crawling)
+    eq_dict.setdefault("FX_intervention", 0.0)
     return EquilibriumV2(**eq_dict)

@@ -61,8 +61,8 @@ def test_events_endogenous_triggers():
     
     apply_event_deltas(state, social_ev)
     
-    assert state["Y_pot"] == Y_pot_before * 0.95, "PIB potencial debería haberse reducido en un 5%"
-    assert state["structural"]["c1"] == c1_before - 0.05, "Propensión c1 debería haber disminuido en 0.05"
+    assert state["Y_pot"] == Y_pot_before * 0.97, "PIB potencial debería haberse reducido en un 3%"
+    assert state["structural"]["c1"] == pytest.approx(c1_before - 0.02), "Propensión c1 debería haber disminuido en 0.02"
     assert "social_unrest" in state["active_events"], "social_unrest debe figurar en active_events"
     assert any("disturbios" in item["message"].lower() for item in state["news_feed"]), "Debe haber una noticia en el feed"
 
@@ -96,7 +96,7 @@ def test_bank_panic_trigger():
     # Aplicar delta
     panic_ev = [e for e in events if e["event_id"] == "bank_panic"][0]
     apply_event_deltas(state, panic_ev)
-    assert state["delta_E_expected"] == 0.20, "Expectativas de devaluación debieron dispararse a 20%"
+    assert state["delta_E_expected"] == 0.05, "Expectativas de devaluación debieron dispararse a 5%"
 
 
 def test_stagflation_trap_trigger():

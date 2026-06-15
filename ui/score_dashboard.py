@@ -50,22 +50,24 @@ def render_score_gauge(score_period: int, score_accum: float, t: int, max_t: int
         deficit_pct=deficit_pct,
         R=current_snap["R"],
         R_0=R_0_ref,
+        gY=current_snap.get("gY", 0.0),
+        scenario_id=mgr.state.get("scenario_id", "unknown"),
+        current_turn=t,
+        has_real_fiscal_surplus=(current_snap["deficit"] < 0.0),
     )
 
     with c1:
         emoji = get_score_emoji(score_period)
         st.markdown(_kpi_card(f"Score Período Actual (t = {t})", f"{score_period}/100", f"<span style='font-size:1.2rem;'>{emoji}</span>"), unsafe_allow_html=True)
         
-        # Desglose de dimensiones en formato premium
+        # Desglose de dimensiones en formato premium unificado
         st.markdown("**Desglose de Desempeño (Período):**")
         
-        d_cols = st.columns(5)
+        d_cols = st.columns(3)
         d_lbls = [
-            ("Brecha", "gap", 25, "🔵"),
-            ("Empleo", "U", 25, "💼"),
-            ("Precios", "pi", 25, "📈"),
-            ("Fiscal", "deficit", 15, "💸"),
-            ("Reservas", "reservas", 10, "🏦")
+            ("Empleo (40%)", "U", 40, "💼"),
+            ("Precios (40%)", "pi", 40, "📈"),
+            ("Crecimiento (20%)", "gY", 20, "🔵")
         ]
         
         for idx, (label, key, max_pts, icon) in enumerate(d_lbls):

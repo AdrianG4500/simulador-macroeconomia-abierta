@@ -30,6 +30,9 @@ def main():
     except Exception:
         pass
 
+    # ── INYECTAR FUENTES UNA SOLA VEZ (F-23 FIX) ─────────────────────────────
+    from ui.styles import FONTS_LINK_TAG
+    st.markdown(FONTS_LINK_TAG, unsafe_allow_html=True)
     
     # ── ESTILOS CSS PREMUM GLOBAL ──────────────────────────────────────────────
     st.markdown("""

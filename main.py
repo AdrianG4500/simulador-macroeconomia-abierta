@@ -34,46 +34,95 @@ def main():
     from ui.styles import FONTS_LINK_TAG
     st.markdown(FONTS_LINK_TAG, unsafe_allow_html=True)
     
-    # ── ESTILOS CSS PREMUM GLOBAL ──────────────────────────────────────────────
-    st.markdown("""
-    <style>
-      .main { background-color: #0B1120; color: #f8fafc; }
-      .stTabs [data-baseweb="tab-list"] { gap: 8px; }
-      .stTabs [data-baseweb="tab"] { height: 42px; white-space: nowrap; background-color: #1e293b; border-radius: 6px; padding: 6px 16px; border: 1px solid #334155; }
-      .stTabs [data-baseweb="tab"][aria-selected="true"] { background-color: #f59e0b; color: #0B1120; font-weight: 700; border-color: #f59e0b; }
-      
-      .metric-card { 
-          background: #111827; 
-          border: 1px solid #1e293b; 
-          border-radius: 10px; 
-          padding: 14px 18px; 
-          margin-bottom: 12px; 
-          box-shadow: 0 4px 10px rgba(0,0,0,0.4); 
-          border-left: 4px solid #3b82f6;
-      }
-      .metric-label { font-size: 0.85rem; color: #94a3b8; margin-bottom: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;}
-      .metric-value { font-size: 1.5rem; font-weight: 800; color: #f8fafc; display: flex; justify-content: space-between; align-items: center;}
-      .unit { font-size: 0.85rem; color: #a1a1aa; font-weight: 600; }
-      
-      /* Botones y badges */
-      .game-over-box {
-          background: #450a0a;
-          border: 2px solid #ef4444;
-          border-radius: 12px;
-          padding: 24px;
-          margin-bottom: 20px;
-          box-shadow: 0 0 25px rgba(239, 68, 68, 0.25);
-      }
-      .endgame-box {
-          background: #022c22;
-          border: 2px solid #10b981;
-          border-radius: 12px;
-          padding: 24px;
-          margin-bottom: 20px;
-          box-shadow: 0 0 25px rgba(16, 185, 129, 0.25);
-      }
-    </style>
-    """, unsafe_allow_html=True)
+    # ── ESTILOS CSS PREMIUM GLOBAL DINÁMICO ──────────────────────────────────────
+    if "theme" not in st.session_state:
+        st.session_state["theme"] = "executive"
+        
+    theme = st.session_state["theme"]
+    if theme == "strategy":
+        # Strategy Mode (Oscuro)
+        st.markdown("""
+        <style>
+          .main { background-color: #0B1120; color: #f8fafc; }
+          .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+          .stTabs [data-baseweb="tab"] { height: 42px; white-space: nowrap; background-color: #1e293b; border-radius: 6px; padding: 6px 16px; border: 1px solid #334155; }
+          .stTabs [data-baseweb="tab"][aria-selected="true"] { background-color: #f59e0b; color: #0B1120; font-weight: 700; border-color: #f59e0b; }
+          
+          .metric-card { 
+              background: #111827; 
+              border: 1px solid #1e293b; 
+              border-radius: 10px; 
+              padding: 14px 18px; 
+              margin-bottom: 12px; 
+              box-shadow: 0 4px 10px rgba(0,0,0,0.4); 
+              border-left: 4px solid #3b82f6;
+          }
+          .metric-label { font-size: 0.85rem; color: #94a3b8; margin-bottom: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;}
+          .metric-value { font-size: 1.5rem; font-weight: 800; color: #f8fafc; display: flex; justify-content: space-between; align-items: center;}
+          .unit { font-size: 0.85rem; color: #a1a1aa; font-weight: 600; }
+          
+          /* Botones y badges */
+          .game-over-box {
+              background: #450a0a;
+              border: 2px solid #ef4444;
+              border-radius: 12px;
+              padding: 24px;
+              margin-bottom: 20px;
+              box-shadow: 0 0 25px rgba(239, 68, 68, 0.25);
+          }
+          .endgame-box {
+              background: #022c22;
+              border: 2px solid #10b981;
+              border-radius: 12px;
+              padding: 24px;
+              margin-bottom: 20px;
+              box-shadow: 0 0 25px rgba(16, 185, 129, 0.25);
+          }
+        </style>
+        """, unsafe_allow_html=True)
+    else:
+        # Executive Mode (Claro)
+        st.markdown("""
+        <style>
+          .main { background-color: #F8FAFC; color: #000000; }
+          .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+          .stTabs [data-baseweb="tab"] { height: 42px; white-space: nowrap; background-color: #E2E8F0; border-radius: 6px; padding: 6px 16px; border: 1px solid #CBD5E1; color: #475467; }
+          .stTabs [data-baseweb="tab"][aria-selected="true"] { background-color: #0068ff; color: #FFFFFF; font-weight: 700; border-color: #0068ff; }
+          
+          .metric-card { 
+              background: #FFFFFF; 
+              border: 1px solid #CBD5E1; 
+              border-radius: 10px; 
+              padding: 14px 18px; 
+              margin-bottom: 12px; 
+              box-shadow: 0 1px 3px rgba(0,0,0,0.05); 
+              border-left: 4px solid #0068ff;
+          }
+          .metric-label { font-size: 0.85rem; color: #475467; margin-bottom: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;}
+          .metric-value { font-size: 1.5rem; font-weight: 800; color: #000000; display: flex; justify-content: space-between; align-items: center;}
+          .unit { font-size: 0.85rem; color: #475467; font-weight: 600; }
+          
+          /* Botones y badges */
+          .game-over-box {
+              background: #fee2e2;
+              border: 2px solid #ef4444;
+              border-radius: 12px;
+              padding: 24px;
+              margin-bottom: 20px;
+              box-shadow: 0 4px 10px rgba(239, 68, 68, 0.1);
+              color: #b91c1c;
+          }
+          .endgame-box {
+              background: #d1fae5;
+              border: 2px solid #10b981;
+              border-radius: 12px;
+              padding: 24px;
+              margin-bottom: 20px;
+              box-shadow: 0 4px 10px rgba(16, 185, 129, 0.1);
+              color: #047857;
+          }
+        </style>
+        """, unsafe_allow_html=True)
     
     st.title("The Economic War Room")
     

@@ -54,10 +54,10 @@ def test_playability_chile_2000_2005():
     for turn in range(1, 11):
         pi = copy.deepcopy(sm.current_instruments)
 
-        if turn in (3, 4):
+        if turn in (3, 4, 5):
             # Contracíclica en desaceleración: Estímulo con inversión pública y rebaja de tasa
             pi["Ig"] = 8.0
-            pi["Gc"] = 14.0
+            pi["Gc"] = 14.5
             pi["r_ref"] = 4.25
             pi["tau"] = 0.04
         elif turn in (6, 7, 8):
@@ -140,7 +140,7 @@ def test_playability_bolivia_1982_ds21060():
         if turn <= 3:
             # T1-T3: Terapia de shock D.S. 21060 + Reforma Tributaria Ley 843
             # 1. Recorte drástico del gasto corriente sobredimensionado
-            pi["Gc"] = 13.0
+            pi["Gc"] = 14.0
             pi["Ig"] = 2.0
             # 2. Reforma tributaria Ley 843 (subir tc al 18% y tk al 12%)
             pi["tc"] = 0.18
@@ -152,13 +152,13 @@ def test_playability_bolivia_1982_ds21060():
             pi["tau"] = 0.10
             pi["sx"] = 0.03
         else:
-            # T4-T10: Reactivación post-estabilización prudente
-            pi["Gc"] = 13.0
-            pi["Ig"] = min(5.0, 2.0 + (turn - 3) * 0.5)
+            # T4-T10: Reactivación post-estabilización según receta histórica (normalizar tasa a 7% y expandir Ig)
+            pi["Gc"] = 14.0
+            pi["Ig"] = min(8.0, 3.0 + (turn - 3) * 1.0)
             pi["tc"] = 0.18
             pi["tk"] = 0.12
-            pi["r_ref"] = max(7.0, 18.0 - (turn - 3) * 1.8)
-            pi["sx"] = 0.03
+            pi["r_ref"] = 7.0
+            pi["sx"] = 0.04
             pi["tau"] = 0.08
             pi["crawl_rate"] = 0.01
 

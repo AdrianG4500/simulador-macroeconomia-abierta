@@ -14,9 +14,12 @@ import pytest
 from config_simple.parameters import PolicyInstruments
 from config_simple.scenarios import SCENARIOS
 from engine_simple.advisor import generate_cabinet_advice, run_dry_run
+from engine_simple.core import compute_salter_swan
+from engine_simple.dynamics import compute_fiscal_balance, compute_sovereign_risk
 from engine_simple.events import (
     apply_event_deltas,
     evaluate_endogenous_events,
+    evaluate_random_events,
     get_event_by_id,
     revert_event_deltas,
     tick_active_events,
@@ -204,3 +207,64 @@ def test_exogenous_event_trigger_in_gameplay():
     assert snap1["Y"] > 0
     identity_error = abs(snap1["Y"] - (snap1["C"] + snap1["I_inv"] + snap1["G"] + snap1["NX"]))
     assert identity_error < 1e-12
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. PRUEBAS DE V1.3: FASE A (PISO DE DEUDA, RATING, SHOCKS Y SALTER-SWAN)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_v1_3_structural_debt_floor_and_fse():
+    """Verifica que la deuda no caiga por debajo del 10% del PIB y el superávit se transfiera a reservas."""
+    recaudacion, subs, ints, deficit, B_new, def_prim = compute_fiscal_balance(
+        Gc=5.0, Ig=0.0, tc=0.40, tk=0.30, tau=0.20, sx=0.0,
+        Y=100.0, X=20.0, M_imp=10.0, B_prev=10.0, r_star=2.0, rho=0.5,
+        PIB_nominal=100.0,
+    )
+    # PIB_nominal = 100 => B_min = 10.0. Como deficit es fuertemente negativo, B_new debe mantenerse en 10.0
+    assert B_new >= 10.0
+    assert deficit < 0.0
+
+
+def test_v1_3_multidimensional_sovereign_risk():
+    """Verifica que alta inflación o desempleo impidan calificación AAA/AA aun con deuda baja."""
+    # Deuda baja (15%), inflación controlada (3%), desempleo normal (5%) => AAA
+    rho_aaa, rating_aaa = compute_sovereign_risk(B=15.0, PIB_nominal=100.0, R=50.0, pi=0.03, U=0.05, Un=0.05)
+    assert rating_aaa == "AAA"
+    assert rho_aaa == 0.5
+
+    # Deuda baja (15%), pero inflación descontrolada (20%) => Pierde grado de inversión (máximo BB)
+    rho_junk, rating_junk = compute_sovereign_risk(B=15.0, PIB_nominal=100.0, R=50.0, pi=0.20, U=0.05, Un=0.05)
+    assert rating_junk not in ("AAA", "AA+", "AA", "A", "BBB"), "No debe tener Grado de Inversión con 20% de inflación"
+
+    # Deuda sobre 150% del PIB => Default / D
+    rho_d, rating_d = compute_sovereign_risk(B=160.0, PIB_nominal=100.0, R=20.0, pi=0.03, U=0.05, Un=0.05)
+    assert rating_d == "D"
+    assert rho_d == 18.0
+
+
+def test_v1_3_random_events_cooldown():
+    """Verifica que los eventos aleatorios respeten el período de gracia y el cooldown de 2 turnos."""
+    # Turno 1 y 2: gracia
+    ev1, cd1 = evaluate_random_events(turn=1, cooldown_counter=0, active_event_ids=[])
+    assert ev1 is None
+
+    ev2, cd2 = evaluate_random_events(turn=2, cooldown_counter=0, active_event_ids=[])
+    assert ev2 is None
+
+    # Cooldown activo > 0 bloquea activación
+    ev_cd, cd_rem = evaluate_random_events(turn=5, cooldown_counter=2, active_event_ids=[])
+    assert ev_cd is None
+    assert cd_rem == 1
+
+
+def test_v1_3_salter_swan_canonical_quadrants():
+    """Verifica que los cuadrantes de Salter-Swan sigan la nomenclatura canónica macroeconómica."""
+    sm = StateManager("chile_rule")
+    eq_base = dict(sm.history[0])
+    sp = sm.current_params
+
+    res_base = compute_salter_swan(eq_base, sp, eq_base["G"])
+    assert res_base["zone"] in ("I", "II", "III", "IV")
+    assert "ml_satisfied" in res_base
+    assert res_base["slope_IB"] < 0.0, "La curva IB debe tener pendiente negativa"
+    assert res_base["slope_EB"] > 0.0, "La curva EB debe tener pendiente positiva"

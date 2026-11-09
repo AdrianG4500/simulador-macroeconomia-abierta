@@ -336,25 +336,25 @@ def solve_equilibrium(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BLOQUE 3: SALTER-SWAN DINÁMICO (4 Cuadrantes)
+# BLOQUE 3: SALTER-SWAN DINÁMICO (4 Cuadrantes Canónicos)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _ZONE_MAP: dict[str, tuple[str, str]] = {
     "I": (
-        "Superávit de Cuenta Corriente + Sobreempleo (presiones inflacionarias).",
-        "Apreciar el tipo de cambio real (revaluar E) o contraer la absorción doméstica (reducir G).",
+        "Zona I: Sobrecalentamiento con Superávit Externo (Inflación + Superávit en Cuenta Corriente).",
+        "Reducir absorción doméstica (ajuste fiscal o alza de TPM) o apreciar la moneda nacional (revaluar E).",
     ),
     "II": (
-        "Superávit de Cuenta Corriente + Desempleo (capacidad ociosa).",
-        "Expandir la absorción doméstica (aumentar Ig o reducir tc) para estimular la demanda interna.",
+        "Zona II: Capacidad Ociosa con Superávit Externo (Desempleo + Superávit en Cuenta Corriente).",
+        "Estimular el gasto interno y absorción doméstica (aumentar Ig o reducir impuestos) para cerrar la brecha de empleo.",
     ),
     "III": (
-        "Déficit de Cuenta Corriente + Desempleo (dilema de política macroeconómica).",
-        "Depreciar el tipo de cambio real (devaluar E) para ganar competitividad externa.",
+        "Zona III: Crisis Gemela Clásica (Desempleo + Déficit en Cuenta Corriente).",
+        "Depreciar el tipo de cambio real (devaluar E) para ganar competitividad externa y reactivar el empleo vía exportaciones.",
     ),
     "IV": (
-        "Déficit de Cuenta Corriente + Sobreempleo (economía recalentada).",
-        "Contraer la absorción doméstica (política fiscal restrictiva) para reducir importaciones.",
+        "Zona IV: Sobreconsumo con Desbalance Externo (Inflación + Déficit en Cuenta Corriente).",
+        "Ajuste fiscal contractivo (reducir Gc y absorción) para enfriar la demanda doméstica y recortar importaciones.",
     ),
 }
 
@@ -365,22 +365,39 @@ def compute_salter_swan(
     G_total: float,
     A_ref: float = 100.0,
     q_ref: float = 1.0,
+    Y_pot: Optional[float] = None,
 ) -> SalterSwanResult:
     """
     Análisis dinámico del modelo Salter-Swan con pendientes estructurales derivadas.
-    Usa la información del equilibrio para clasificar la posición en los 4 cuadrantes.
+    Usa la información del equilibrio para clasificar la posición en los 4 cuadrantes canónicos.
 
-    Pendiente IB (Balance Interno): dq/dA|_IB negativa (recta descendente).
-    Pendiente EB (Balance Externo): dq/dA|_EB positiva (recta ascendente).
+    Pendiente IB (Balance Interno - Pleno Empleo Y = Y_pot):
+        dq/dA|_IB = - (1 - c1·(1 - tc) + m1) / (epsilon_x + epsilon_m) < 0 (recta descendente).
+        Puntos arriba de IB: Presiones inflacionarias / Exceso de absorción.
+        Puntos abajo de IB: Desempleo / Brecha recesiva.
+
+    Pendiente EB (Balance Externo - Equilibrio en Cuenta Corriente NX = 0):
+        dq/dA|_EB = m1 / (epsilon_x + epsilon_m) > 0 (recta ascendente).
+        Puntos arriba de EB: Superávit de Cuenta Corriente (NX > 0).
+        Puntos abajo de EB: Déficit de Cuenta Corriente (NX < 0).
+
+    Cuadrantes Canónicos:
+        Zona I:   q > q_IB y q > q_EB (Inflación + Superávit)
+        Zona II:  q < q_IB y q > q_EB (Desempleo + Superávit)
+        Zona III: q < q_IB y q < q_EB (Desempleo + Déficit)
+        Zona IV:  q > q_IB y q < q_EB (Inflación + Déficit)
     """
     A_actual = eq_result["A_domestic"]
     q_actual = eq_result["q_real"]
+
+    if Y_pot is not None and Y_pot > 0.0:
+        A_ref = Y_pot
 
     tc_eff = sp.get("tc", 0.16) if "tc" not in sp else 0.16
     ml_satisfied = (sp["epsilon_x"] + sp["epsilon_m"]) > 1.0
 
     slope_numerator_IB = 1.0 - sp["c1"] * (1.0 - tc_eff) + sp["m1"]
-    slope_denominator = max(sp["epsilon_x"], 1e-4)
+    slope_denominator = max(sp["epsilon_x"] + sp.get("epsilon_m", 0.0), 1e-4)
 
     scale_factor = q_ref / max(A_ref, 1.0)
     slope_IB = (-slope_numerator_IB / slope_denominator) * scale_factor

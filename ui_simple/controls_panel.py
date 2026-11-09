@@ -2,14 +2,16 @@
 ui_simple/controls_panel.py
 ===========================
 Panel de controles de política económica (Columna Izquierda: ~25% ancho).
-Edición: The Economic War Room (V1.2 SIMPLE).
+Edición: The Economic War Room (V1.3 SIMPLE — Realismo y Experiencia Didáctica).
 
 Características:
 - Selector de Escenario con metadatos históricos y dificultad.
-- Las 8 Palancas de Política Económica agrupadas por bloques ministeriales.
-- Reforma Cambiaria de Emergencia (cambio de régimen en tiempo de ejecución).
-- Vista Previa de Impacto en Tiempo Real (Proyección t+1) para Beta-Testing.
-- Botón de avance de turno y control de fin de partida.
+- Las 8 Palancas de Política Económica con textos de ayuda didácticos exhaustivos (help).
+- Micro-badges informativos bajo cada palanca de política.
+- Nomenclatura institucional clarificada: "🏦 Tasa de Interés del Banco Central (TPM %)".
+- Reforma Cambiaria de Emergencia (cambio institucional de régimen en tiempo de ejecución).
+- Vista Previa de Impacto en Tiempo Real (Proyección t+1) para toma de decisiones informada.
+- Eliminación de choques manuales en la barra lateral (procesados orgánicamente vía modales emergentes).
 """
 
 from __future__ import annotations
@@ -25,20 +27,11 @@ from engine_simple.state_manager import StateManager
 
 def render_controls_panel(state_mgr: StateManager) -> Dict[str, Any]:
     """
-    Renderiza la columna izquierda de controles y palancas.
+    Renderiza la columna izquierda de controles y palancas de política económica.
 
     Returns
     -------
-    Dict[str, Any] : Acción a procesar por el layout principal:
-        {
-            "action": "none" | "step" | "change_scenario" | "trigger_event" | "switch_regime",
-            "new_scenario": str,
-            "event_id": str,
-            "new_regime": str,
-            "new_E": float,
-            "new_crawl": float,
-            "instruments": PolicyInstruments,
-        }
+    Dict[str, Any] : Acción a procesar por el layout principal.
     """
     st.markdown("### 🎛️ Controles de Política")
 
@@ -56,7 +49,6 @@ def render_controls_panel(state_mgr: StateManager) -> Dict[str, Any]:
     # 1. SELECTOR DE ESCENARIO HISTÓRICO
     # ─────────────────────────────────────────────────────────────────────────
     with st.expander("🏛️ Escenario Histórico", expanded=False):
-        # Filtrar solo las 4 claves canónicas para evitar duplicados en el selector
         canonical_keys = ["tiger_asia", "chile_rule", "mexico_tequila", "bolivia_hyper"]
         current_canonical = state_mgr.scenario_id
         if current_canonical not in canonical_keys:
@@ -74,7 +66,7 @@ def render_controls_panel(state_mgr: StateManager) -> Dict[str, Any]:
             canonical_keys,
             index=current_idx,
             format_func=lambda k: SCENARIOS[k]["name"],
-            help="Selecciona una economía real histórica con sus desafíos específicos."
+            help="Selecciona una economía real histórica con sus desafíos macroeconómicos específicos.",
         )
 
         if selected_scenario != current_canonical:
@@ -88,7 +80,7 @@ def render_controls_panel(state_mgr: StateManager) -> Dict[str, Any]:
             "Fácil": "🟢",
             "Normal": "🟡",
             "Difícil": "🟠",
-            "Muy Difícil": "🔴"
+            "Muy Difícil": "🔴",
         }.get(scen_info.get("difficulty", "Normal"), "⚪")
 
         st.markdown(f"**Dificultad:** {diff_color} {scen_info.get('difficulty', 'Normal')}")
@@ -101,11 +93,12 @@ def render_controls_panel(state_mgr: StateManager) -> Dict[str, Any]:
 
     # Copia mutable de instrumentos actuales para binding
     inst: PolicyInstruments = copy.deepcopy(state_mgr.current_instruments)
+    curr_snap = state_mgr.history[-1]
 
     # ─────────────────────────────────────────────────────────────────────────
     # 2. BLOQUE 1: POLÍTICA FISCAL (MINISTERIO DE HACIENDA)
     # ─────────────────────────────────────────────────────────────────────────
-    st.markdown("#### 🏛️ Ministerio de Hacienda (Fiscal)")
+    st.markdown("#### 💼 Ministerio de Hacienda (Fiscal)")
 
     # 1. Gasto Corriente Gc [5.0, 35.0], paso 0.5
     inst["Gc"] = st.slider(
@@ -114,7 +107,7 @@ def render_controls_panel(state_mgr: StateManager) -> Dict[str, Any]:
         max_value=35.0,
         value=float(inst.get("Gc", 14.0)),
         step=0.5,
-        help="Sube la Demanda Agregada (Y) hoy; aumenta el déficit fiscal; no amplía el PIB potencial."
+        help="Gasto en sueldos públicos y bienes de consumo del Estado. Expande la demanda agregada y el PIB inmediatamente, pero eleva el déficit fiscal y presiona la inflación.",
     )
 
     # 2. Inversión Pública Ig [0.0, 25.0], paso 0.5
@@ -124,7 +117,17 @@ def render_controls_panel(state_mgr: StateManager) -> Dict[str, Any]:
         max_value=25.0,
         value=float(inst.get("Ig", 6.0)),
         step=0.5,
-        help="Sube la Demanda Agregada hoy; expande el PIB Potencial futuro (Y_pot) y atrae inversión privada (crowding-in)."
+        help="Gasto de capital en carreteras, puertos y energía. Aumenta la demanda presente y expande el PIB potencial futuro (Y_pot), generando crowding-in en la inversión privada.",
+    )
+
+    # Micro-badge Gasto Total
+    g_total = inst["Gc"] + inst["Ig"]
+    st.markdown(
+        f"<div style='font-size: 0.76rem; color: #64748b; margin-top: -8px; margin-bottom: 10px;'>"
+        f"📊 <b>Gasto Total del Estado (G):</b> {g_total:.1f} MUSD "
+        f"({inst['Gc']:.1f} corriente + {inst['Ig']:.1f} capital)"
+        f"</div>",
+        unsafe_allow_html=True,
     )
 
     col_tax1, col_tax2 = st.columns(2)
@@ -136,7 +139,7 @@ def render_controls_panel(state_mgr: StateManager) -> Dict[str, Any]:
             max_value=40.0,
             value=float(inst.get("tc", 0.16) * 100.0),
             step=0.5,
-            help="Reduce el ingreso disponible familiar y achica el multiplicador; recauda fondos fiscales."
+            help="Grava el ingreso disponible de los hogares. Subirlo incrementa la recaudación y baja el déficit, pero frena el consumo privado y el PIB.",
         )
         inst["tc"] = tc_pct / 100.0
 
@@ -148,25 +151,44 @@ def render_controls_panel(state_mgr: StateManager) -> Dict[str, Any]:
             max_value=35.0,
             value=float(inst.get("tk", 0.10) * 100.0),
             step=0.5,
-            help="Reduce la inversión privada empresarial; aumenta recaudación sin tocar consumo familiar."
+            help="Grava los beneficios empresariales. Subirlo aumenta la recaudación fiscal, pero desincentiva directamente la inversión privada de capital (I_priv).",
         )
         inst["tk"] = tk_pct / 100.0
+
+    # Micro-badge Carga Tributaria
+    st.markdown(
+        f"<div style='font-size: 0.76rem; color: #64748b; margin-top: -8px; margin-bottom: 12px;'>"
+        f"💰 <b>Presión Fiscal Combinada:</b> {(tc_pct + tk_pct):.1f}% sobre la base imponible"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
     st.markdown("---")
 
     # ─────────────────────────────────────────────────────────────────────────
     # 3. BLOQUE 2: POLÍTICA MONETARIA (BANCO CENTRAL)
     # ─────────────────────────────────────────────────────────────────────────
-    st.markdown("#### 🏦 Banco Central (Monetario)")
+    st.markdown("#### 🏛️ Banco Central (Monetario)")
 
-    # 5. Tasa de Política Monetaria TPM r_ref [1.0%, 30.0%], paso 0.25%
+    # 5. Tasa de Interés Objetivo del Banco Central (TPM %) [1.0%, 30.0%], paso 0.25%
     inst["r_ref"] = st.slider(
-        "Tasa de Política Monetaria (TPM r_ref %)",
+        "🏦 Tasa de Interés Objetivo del Banco Central (TPM %)",
         min_value=1.0,
         max_value=30.0,
         value=float(inst.get("r_ref", 5.0)),
         step=0.25,
-        help="Sube la tasa de interés real, enfría la inversión privada, frena la salida de capitales y ancla expectativas."
+        help="Esta es la tasa meta oficial que tú decretas por ley como autoridad monetaria. Subirla busca frenar la inflación y atraer dólares, pero encarece el crédito. Es tu volante para guiar la economía.",
+    )
+
+    # Micro-badge Tasa Real Estimada
+    pi_e_val = curr_snap.get("pi_e", 0.03) * 100.0
+    r_real_est = inst["r_ref"] - pi_e_val
+    st.markdown(
+        f"<div style='font-size: 0.76rem; color: #64748b; margin-top: -8px; margin-bottom: 12px;'>"
+        f"📈 <b>Tasa Real Proyectada (Fisher):</b> {r_real_est:+.2f}% "
+        f"(TPM {inst['r_ref']:.2f}% − Exp. Inflación {pi_e_val:.1f}%)"
+        f"</div>",
+        unsafe_allow_html=True,
     )
 
     st.markdown("---")
@@ -185,7 +207,7 @@ def render_controls_panel(state_mgr: StateManager) -> Dict[str, Any]:
             max_value=30.0,
             value=float(inst.get("tau", 0.05) * 100.0),
             step=0.5,
-            help="Frena importaciones y protege reservas, pero encarece precios locales sumando inflación."
+            help="Impuesto sobre bienes importados. Protege la industria nacional y reduce las importaciones (M), pero encarece los precios locales y genera presiones inflacionarias.",
         )
         inst["tau"] = tau_pct / 100.0
 
@@ -197,15 +219,15 @@ def render_controls_panel(state_mgr: StateManager) -> Dict[str, Any]:
             max_value=20.0,
             value=float(inst.get("sx", 0.00) * 100.0),
             step=0.5,
-            help="Impulsa exportaciones y PIB, pero cuesta dinero al fisco aumentando el déficit."
+            help="Incentivo directo a los productores exportadores. Incrementa las exportaciones brutas (X) y mejora la cuenta corriente, pero representa un gasto fiscal directo.",
         )
         inst["sx"] = sx_pct / 100.0
 
     # 8. Instrumento Cambiario según régimen
     current_regime = inst.get("regime", "fixed")
     regime_labels = {
-        "fixed": "🔒 Régimen Fijo (TC Fijado)",
-        "flexible": "🌊 Régimen Flexible (Flotación limpia)",
+        "fixed": "🔒 Tipo de Cambio Fijo (Anclado)",
+        "flexible": "🌊 Flotación Limpia (Flexible)",
         "crawling_peg": "📈 Deslizamiento Programado (Crawling Peg)",
     }
     st.caption(f"**Régimen Vigente:** `{regime_labels.get(current_regime, current_regime)}`")
@@ -217,7 +239,7 @@ def render_controls_panel(state_mgr: StateManager) -> Dict[str, Any]:
             max_value=25.0,
             value=float(inst.get("E", 10.0)),
             step=0.1,
-            help="El gobierno fija E. Devaluar (E↑) mejora el saldo comercial pero genera inflación por pass-through."
+            help="Precio de la divisa extranjera en moneda local fijado por el gobierno. Devaluar abarata los productos nacionales en el exterior y mejora NX, pero encarece transables y genera inflación vía pass-through.",
         )
     elif current_regime == "crawling_peg":
         crawl_pct = st.slider(
@@ -226,17 +248,17 @@ def render_controls_panel(state_mgr: StateManager) -> Dict[str, Any]:
             max_value=25.0,
             value=float(inst.get("crawl_rate", 0.08) * 100.0),
             step=0.5,
-            help="Tasa porcentual de depreciación periódica programada por el Banco Central."
+            help="Tasa porcentual periódica de depreciación programada y anunciada formalmente por el Banco Central.",
         )
         inst["crawl_rate"] = crawl_pct / 100.0
     else:
         st.info(
-            "🌊 **Flotación de Mercado**: El tipo de cambio no se controla por slider. "
-            "El mercado lo determina automáticamente según la Balanza de Pagos."
+            "🌊 **Flotación Libre de Mercado**: El tipo de cambio no se controla mediante slider. "
+            "El mercado cambiario lo determina automáticamente según la Balanza de Pagos."
         )
 
     # ─────────────────────────────────────────────────────────────────────────
-    # REFORMA CAMBIARIA DE EMERGENCIA (HERRAMIENTA HISTÓRICA)
+    # REFORMA CAMBIARIA DE EMERGENCIA (HERRAMIENTA HISTÓRICA INSTITUCIONAL)
     # ─────────────────────────────────────────────────────────────────────────
     with st.expander("🚨 Reforma Cambiaria de Emergencia", expanded=False):
         st.caption(
@@ -248,7 +270,7 @@ def render_controls_panel(state_mgr: StateManager) -> Dict[str, Any]:
             ["fixed", "flexible", "crawling_peg"],
             index=["fixed", "flexible", "crawling_peg"].index(current_regime),
             format_func=lambda r: regime_labels[r],
-            key="reform_regime_select"
+            key="reform_regime_select",
         )
         reform_E = float(inst.get("E", 10.0))
         reform_crawl = float(inst.get("crawl_rate", 0.02) * 100.0)
@@ -276,12 +298,10 @@ def render_controls_panel(state_mgr: StateManager) -> Dict[str, Any]:
     # ─────────────────────────────────────────────────────────────────────────
     with st.expander("👁️ Vista Previa de Impacto (Proyección t+1)", expanded=True):
         try:
-            # Sincronizar compatibilidad para cálculo de dry run
             inst["G"] = inst["Gc"] + inst["Ig"] + inst.get("G_needed", 0.0)
             inst["t"] = inst["tc"]
 
             dry_snap = state_mgr.get_dry_run_projection(inst)
-            curr_snap = state_mgr.history[-1]
 
             delta_Y = (dry_snap["Y"] - curr_snap["Y"]) / curr_snap["Y"] * 100.0 if curr_snap["Y"] > 0 else 0.0
             delta_U = (dry_snap["U"] - curr_snap["U"]) * 100.0
@@ -300,17 +320,17 @@ def render_controls_panel(state_mgr: StateManager) -> Dict[str, Any]:
                 st.caption(f"**Reservas**: {dry_snap['R']:.1f} MUSD ({delta_R:+.1f})")
                 st.caption(f"**Aprobación**: {dry_snap['score']:.1f} ({delta_score:+.1f} pts)")
 
-            # Alertas tempranas preventivas
+            # Alertas preventivas
             if dry_snap["pi"] > 0.35:
                 st.error("🚨 Alerta: Inflación entrará en zona de Alerta Roja (>35%).")
             elif dry_snap["pi"] > 0.08:
                 st.warning("⚠️ Alerta: Presión inflacionaria elevada.")
 
             if dry_snap["debt_to_gdp_nominal"] > 1.35:
-                st.error("🚨 Alerta: Deuda/PIB entrará en zona de Default (>135%).")
+                st.error("🚨 Alerta: Deuda/PIB entrará en zona de Insolvencia (>135%).")
 
             if dry_snap["R"] < 8.0 and inst["regime"] in ("fixed", "crawling_peg"):
-                st.error("🚨 Alerta: Reservas en nivel crítico de crisis externa (<8 MUSD).")
+                st.error("🚨 Alerta: Reservas en nivel crítico de Balanza de Pagos (<8 MUSD).")
 
             if dry_snap["U"] > 0.22:
                 st.error("🚨 Alerta: Desempleo crítico cercano al estallido social (>22%).")
@@ -318,35 +338,10 @@ def render_controls_panel(state_mgr: StateManager) -> Dict[str, Any]:
         except Exception as e:
             st.caption(f"Ajuste los controles para recalcular proyección: {e}")
 
-    st.markdown("---")
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # 6. SIMULADOR DE CHOQUES EXÓGENOS DE PRUEBA
-    # ─────────────────────────────────────────────────────────────────────────
-    with st.expander("⚡ Simular Choques Exógenos", expanded=False):
-        col_ev1, col_ev2 = st.columns(2)
-        with col_ev1:
-            if st.button("📈 Boom Commodities", key="btn_boom", use_container_width=True):
-                action_result["action"] = "trigger_event"
-                action_result["event_id"] = "commodity_boom"
-                action_result["instruments"] = inst
-                return action_result
-            if st.button("🏦 Alza Tasa Fed", key="btn_fed", use_container_width=True):
-                action_result["action"] = "trigger_event"
-                action_result["event_id"] = "fed_rate_shock"
-                action_result["instruments"] = inst
-                return action_result
-        with col_ev2:
-            if st.button("📉 Recesión Global", key="btn_recession", use_container_width=True):
-                action_result["action"] = "trigger_event"
-                action_result["event_id"] = "global_recession"
-                action_result["instruments"] = inst
-                return action_result
-
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # 7. BOTÓN PRINCIPAL DE AVANCE DE TURNO
+    # 6. BOTÓN PRINCIPAL DE AVANCE DE TURNO
     # ─────────────────────────────────────────────────────────────────────────
     if state_mgr.is_game_over:
         st.error(f"💀 GAME OVER: {state_mgr.game_over_reason}")
@@ -361,7 +356,8 @@ def render_controls_panel(state_mgr: StateManager) -> Dict[str, Any]:
             action_result["new_scenario"] = state_mgr.scenario_id
             return action_result
     else:
-        if st.button(f"⏩ Avanzar al Turno {state_mgr.current_turn + 1}", type="primary", use_container_width=True):
+        btn_label = f"🏛️ Avanzar al Turno {state_mgr.current_turn + 1} (Gobernar 1 Año)"
+        if st.button(btn_label, type="primary", use_container_width=True):
             action_result["action"] = "step"
             action_result["instruments"] = inst
             return action_result

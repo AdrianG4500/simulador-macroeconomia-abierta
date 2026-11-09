@@ -135,6 +135,35 @@ PREDEFINED_EVENTS: Dict[str, Event] = {
         "param_deltas": {"I0": 2.0},
         "policy_deltas": {},
     },
+
+    # ── Eventos aleatorios calibrados leves (V1.3 con ventana de cooldown) ──
+    "commodity_boom_rnd": {
+        "id": "commodity_boom_rnd",
+        "name": "Boom de Precios de Commodities (+5%)",
+        "description": "Un repunte temporal en la demanda internacional mejora los términos de intercambio (+5.0 en x0).",
+        "category": "exogenous",
+        "duration": 2,
+        "param_deltas": {"x0": 5.0},
+        "policy_deltas": {},
+    },
+    "fed_rate_hike_rnd": {
+        "id": "fed_rate_hike_rnd",
+        "name": "Alza Moderada de Tasas de la Fed (+150 bps)",
+        "description": "La Reserva Federal incrementa su tasa de interés en +1.5%, encareciendo el crédito externo y tensionando flujos de capital.",
+        "category": "exogenous",
+        "duration": 2,
+        "param_deltas": {},
+        "policy_deltas": {"r_star": 1.5},
+    },
+    "climate_drought_rnd": {
+        "id": "climate_drought_rnd",
+        "name": "Shock Climático / Sequía Agrícola (-2%)",
+        "description": "Condiciones meteorológicas desfavorables reducen temporalmente el ritmo de expansión productiva (-2% en crecimiento potencial).",
+        "category": "exogenous",
+        "duration": 2,
+        "param_deltas": {"g_pot": -0.02},
+        "policy_deltas": {},
+    },
 }
 
 
@@ -285,3 +314,91 @@ def tick_active_events(
             })
 
     return still_active, expired_events, p_curr, inst_curr
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EVENTOS ALEATORIOS CALIBRADOS Y VENTANA DE COOLDOWN (V1.3)
+# ─────────────────────────────────────────────────────────────────────────────
+
+RANDOM_EVENTS_POOL: List[str] = [
+    "commodity_boom_rnd",
+    "fed_rate_hike_rnd",
+    "climate_drought_rnd",
+]
+
+
+def evaluate_random_events(
+    turn: int,
+    cooldown_counter: int,
+    active_event_ids: List[str],
+    has_scheduled_event_this_turn: bool = False,
+    scenario_id: str = "",
+) -> Tuple[Optional[Event], int]:
+    """
+    Evalúa la activación de eventos exógenos aleatorios leves con ventana de cooldown.
+
+    Reglas de Calibración Didáctica (V1.3):
+    1. Período de gracia inicial: En turnos 1 y 2 nunca se disparan eventos aleatorios.
+    2. Ventana de Cooldown (Histéresis): Mínimo 2 turnos de pausa entre eventos exógenos graves.
+    3. Exclusión mutua: No se activan si el turno ya cuenta con un evento histórico programado.
+    4. Delicadeza didáctica: Magnitud acotada (+5% en x0, +1.5 pp en r*, -2% en g_pot).
+
+    Returns
+    -------
+    (event_or_none, updated_cooldown_counter)
+    """
+    if has_scheduled_event_this_turn:
+        return None, 2
+
+    if turn <= 2:
+        return None, max(0, cooldown_counter - 1)
+
+    if cooldown_counter > 0:
+        return None, cooldown_counter - 1
+
+    for eid in RANDOM_EVENTS_POOL:
+        if eid in active_event_ids:
+            return None, 0
+
+    trigger_turns = {5: "commodity_boom_rnd", 8: "fed_rate_hike_rnd"}
+    if turn in trigger_turns:
+        selected_id = trigger_turns[turn]
+        if selected_id not in active_event_ids:
+            event = get_event_by_id(selected_id)
+            return event, 2
+
+    return None, 0
+
+
+def format_event_modal_data(event: Event, cabinet_advice: str = "") -> Dict[str, Any]:
+    """
+    Formatea los datos del evento para el modal interactivo de la interfaz (Fase C).
+    Prepara la tabla de impactos cuantitativos y el consejo ministerial.
+    """
+    impacts: List[Dict[str, str]] = []
+
+    for k, v in event.get("param_deltas", {}).items():
+        impacts.append({
+            "Variable": k,
+            "Impacto": f"{'+' if v > 0 else ''}{v}",
+            "Tipo": "Parámetro Estructural",
+        })
+
+    for k, v in event.get("policy_deltas", {}).items():
+        impacts.append({
+            "Variable": k,
+            "Impacto": f"{'+' if v > 0 else ''}{v}",
+            "Tipo": "Variable Externa / Política",
+        })
+
+    advice = cabinet_advice or "Evalúe el impacto en la balanza de pagos, la brecha de producto y ajuste las políticas de forma gradual."
+
+    return {
+        "id": event["id"],
+        "title": event["name"],
+        "description": event["description"],
+        "duration": event["duration"],
+        "impact_metrics": impacts,
+        "advice_summary": advice,
+        "button_label": "Continuar gobernando 🏛️",
+    }

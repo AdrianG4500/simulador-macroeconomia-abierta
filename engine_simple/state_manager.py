@@ -50,6 +50,8 @@ from engine_simple.events import (
     apply_event_deltas,
     create_event_from_scenario,
     evaluate_endogenous_events,
+    evaluate_random_events,
+    format_event_modal_data,
     get_event_by_id,
     tick_active_events,
 )
@@ -75,9 +77,11 @@ class StateManager:
         self.R: float = float(init.get("R", 60.0))
         self.P_NT: float = float(init.get("P_NT", 1.0))
 
-        # Eventos y contadores de crecimiento
+        # Eventos, contadores de crecimiento y cooldown (V1.3)
         self.active_events: List[ActiveEvent] = []
         self.consecutive_high_growth: int = 0
+        self.event_cooldown: int = 0
+        self.pending_modal_event: Optional[Dict[str, Any]] = None
 
         # Blindaje Anti-Bucle y Alertas Críticas
         self.consecutive_danger_turns: Dict[str, int] = {
@@ -106,6 +110,8 @@ class StateManager:
         self.game_over_reason = None
         self.active_events = []
         self.consecutive_high_growth = 0
+        self.event_cooldown = 0
+        self.pending_modal_event = None
         self.consecutive_danger_turns = {
             "debt": 0,
             "reserves": 0,
@@ -148,6 +154,7 @@ class StateManager:
         pi = float(init.get("pi", self.current_instruments["pi_target"]))
         gY = 0.0
 
+        PIB_nominal = eq["PIB_nominal"]
         recaudacion, costo_subsidios, intereses_deuda, deficit, B_new, deficit_primario = compute_fiscal_balance(
             Gc=self.current_instruments["Gc"],
             Ig=self.current_instruments["Ig"],
@@ -162,14 +169,26 @@ class StateManager:
             r_star=self.current_instruments["r_star"],
             rho=rho_init,
             G_needed=self.current_instruments.get("G_needed", 0.0),
+            PIB_nominal=PIB_nominal,
         )
 
-        PIB_nominal = eq["PIB_nominal"]
         debt_to_gdp_nominal = compute_debt_to_gdp_nominal(self.B, PIB_nominal)
-        rho_risk, rating_risk = compute_sovereign_risk(self.B, PIB_nominal, self.R)
+        rho_risk, rating_risk = compute_sovereign_risk(
+            B=self.B,
+            PIB_nominal=PIB_nominal,
+            R=self.R,
+            pi=pi,
+            U=U,
+            Un=self.current_params["U_n"],
+        )
         rating_final = init.get("rating", rating_risk)
 
-        ss: SalterSwanResult = compute_salter_swan(eq, self.current_params, eq["G"])
+        ss: SalterSwanResult = compute_salter_swan(
+            eq_result=eq,
+            sp=self.current_params,
+            G_total=eq["G"],
+            Y_pot=self.Y_pot,
+        )
         score = calc_period_score(
             gap=gap,
             U=U,
@@ -280,6 +299,11 @@ class StateManager:
             "event": event,
             "turns_remaining": event["duration"],
         })
+        self.pending_modal_event = format_event_modal_data(event)
+
+    def dismiss_event_modal(self) -> None:
+        """Cierra el modal de evento emergente actual."""
+        self.pending_modal_event = None
 
     def step_forward(self, policy_input: PolicyInstruments) -> TurnSnapshot:
         """
@@ -302,6 +326,7 @@ class StateManager:
 
         prev_snapshot = self.history[-1]
         next_turn = self.current_turn + 1
+        self.pending_modal_event = None
 
         # ── PASO 1: Aplicar las 8 Palancas y Procesar Eventos ──
         inst = copy.deepcopy(policy_input)
@@ -323,9 +348,11 @@ class StateManager:
         events_triggered_this_turn: List[str] = []
 
         # Verificar eventos programados del escenario para este turno
+        has_scheduled_event = False
         scenario_data = SCENARIOS.get(self.scenario_id, {})
         for sched in scenario_data.get("scheduled_events", []):
             if sched.get("turn") == next_turn:
+                has_scheduled_event = True
                 ev = create_event_from_scenario(sched)
                 if not any(ae["event"]["id"] == ev["id"] for ae in self.active_events):
                     self.current_params, inst = apply_event_deltas(self.current_params, inst, ev)
@@ -334,6 +361,7 @@ class StateManager:
                         "turns_remaining": ev["duration"],
                     })
                     events_triggered_this_turn.append(ev["name"])
+                    self.pending_modal_event = format_event_modal_data(ev)
 
         # Evaluar y aplicar eventos endógenos (estallido social, círculo virtuoso)
         active_ids = [ae["event"]["id"] for ae in self.active_events]
@@ -347,6 +375,26 @@ class StateManager:
                 "turns_remaining": ev["duration"],
             })
             events_triggered_this_turn.append(ev["name"])
+            if self.pending_modal_event is None:
+                self.pending_modal_event = format_event_modal_data(ev)
+
+        # Evaluar eventos aleatorios leves con cooldown (V1.3)
+        rnd_event, self.event_cooldown = evaluate_random_events(
+            turn=next_turn,
+            cooldown_counter=self.event_cooldown,
+            active_event_ids=[ae["event"]["id"] for ae in self.active_events],
+            has_scheduled_event_this_turn=has_scheduled_event,
+            scenario_id=self.scenario_id,
+        )
+        if rnd_event is not None:
+            self.current_params, inst = apply_event_deltas(self.current_params, inst, rnd_event)
+            self.active_events.append({
+                "event": rnd_event,
+                "turns_remaining": rnd_event["duration"],
+            })
+            events_triggered_this_turn.append(rnd_event["name"])
+            if self.pending_modal_event is None:
+                self.pending_modal_event = format_event_modal_data(rnd_event)
 
         # ── PASO 2: Resolver Equilibrio Instantáneo IS-LM-BP (Closed-Form Analytical) ──
         rho_prev = prev_snapshot.get("rho", 0.50)
@@ -400,6 +448,7 @@ class StateManager:
         )
 
         # ── PASO 4: Balance Fiscal, Deuda sobre PIB Nominal y Credibilidad ──
+        PIB_nominal = eq["PIB_nominal"]
         recaudacion, costo_subsidios, intereses_deuda, deficit, B_new, deficit_primario = compute_fiscal_balance(
             Gc=inst["Gc"],
             Ig=inst["Ig"],
@@ -414,9 +463,9 @@ class StateManager:
             r_star=inst["r_star"],
             rho=rho_prev,
             G_needed=inst.get("G_needed", 0.0),
+            PIB_nominal=PIB_nominal,
         )
 
-        PIB_nominal = eq["PIB_nominal"]
         debt_to_gdp_nominal = compute_debt_to_gdp_nominal(B_new, PIB_nominal)
 
         # Credibilidad endógena θ_t ∈ [0.40, 0.80]
@@ -443,6 +492,16 @@ class StateManager:
 
         R_new = update_reserves(self.R, eq["NX"], KA, regime)
 
+        # Mecanismo de Fondo Soberano de Estabilización (FSE / Ahorro en Reservas):
+        # Si la deuda ya está en su piso técnico (10% del PIB nominal), el superávit
+        # excedente se atesora como patrimonio neto en las reservas internacionales.
+        b_unconstrained = self.B + deficit
+        pib_base = PIB_nominal if PIB_nominal > 0.0 else eq["Y"]
+        b_min = max(2.0, 0.10 * pib_base)
+        excess_surplus = max(0.0, b_min - b_unconstrained)
+        if excess_surplus > 0.0:
+            R_new = round(R_new + excess_surplus, 6)
+
         # En régimen flexible, el tipo de cambio absorbe el desbalance y flota
         if regime == "flexible":
             E_adjusted = compute_flexible_exchange_rate_adjustment(
@@ -453,8 +512,20 @@ class StateManager:
             inst["E"] = round(E_adjusted, 2)
             E_curr = inst["E"]
 
-        rho_risk, rating_risk = compute_sovereign_risk(B_new, PIB_nominal, R_new)
-        ss: SalterSwanResult = compute_salter_swan(eq, self.current_params, eq["G"])
+        rho_risk, rating_risk = compute_sovereign_risk(
+            B=B_new,
+            PIB_nominal=PIB_nominal,
+            R=R_new,
+            pi=pi,
+            U=U,
+            Un=self.current_params["U_n"],
+        )
+        ss: SalterSwanResult = compute_salter_swan(
+            eq_result=eq,
+            sp=self.current_params,
+            G_total=eq["G"],
+            Y_pot=self.Y_pot,
+        )
 
         # ── PASO 6: Blindaje Anti-Bucle y Evaluación de Game Over (Regla 1) ──
         go_res: GameOverResult = check_game_over(
@@ -585,7 +656,7 @@ class StateManager:
         Preparado para persistencia en Supabase y entrega de notas en Canvas.
         """
         return {
-            "version": "1.2-SIMPLE",
+            "version": "1.3-SIMPLE",
             "scenario_id": self.scenario_id,
             "current_turn": self.current_turn,
             "Y_pot": self.Y_pot,
@@ -594,6 +665,7 @@ class StateManager:
             "R": self.R,
             "P_NT": self.P_NT,
             "consecutive_high_growth": self.consecutive_high_growth,
+            "event_cooldown": self.event_cooldown,
             "consecutive_danger_turns": copy.deepcopy(self.consecutive_danger_turns),
             "red_alert_active": self.red_alert_active,
             "red_alert_reason": self.red_alert_reason,
@@ -620,6 +692,8 @@ class StateManager:
         instance.R = float(payload["R"])
         instance.P_NT = float(payload.get("P_NT", 1.0))
         instance.consecutive_high_growth = int(payload.get("consecutive_high_growth", 0))
+        instance.event_cooldown = int(payload.get("event_cooldown", 0))
+        instance.pending_modal_event = None
         instance.consecutive_danger_turns = copy.deepcopy(
             payload.get("consecutive_danger_turns", {"debt": 0, "reserves": 0, "inflation": 0, "unemployment": 0})
         )

@@ -196,15 +196,17 @@ def compute_fiscal_balance(
     r_star: float,
     rho: float,
     G_needed: float = 0.0,
+    PIB_nominal: float = 0.0,
 ) -> tuple[float, float, float, float, float, float]:
     """
-    Balance fiscal desagregado (Sección 3.4.1):
+    Balance fiscal desagregado (Sección 3.4.1) con piso estructural de deuda (V1.3):
 
         Recaudación = (tc + tk) · Y + τ · M_imp
         CostoSubsidios = sx · X
         InteresesDeuda = ((r* + ρ) / 100) · B_{t-1}
         Déficit = Gc + Ig + CostoSubsidios + InteresesDeuda + G_needed - Recaudación
-        B_new = max(0.0, B_prev + Déficit)
+        B_min = max(2.0, 0.10 · PIB_nominal) si PIB_nominal > 0 sino max(2.0, 0.10 · Y)
+        B_new = max(B_min, B_prev + Déficit)
 
     Returns
     -------
@@ -215,7 +217,12 @@ def compute_fiscal_balance(
     intereses_deuda = ((r_star + rho) / 100.0) * B_prev
     gasto_total = Gc + Ig + costo_subsidios + intereses_deuda + G_needed
     deficit = gasto_total - recaudacion
-    B_new = max(0.0, B_prev + deficit)
+
+    # Piso estructural de deuda pública (10% del PIB nominal para liquidez de bonos soberanos)
+    pib_base = PIB_nominal if PIB_nominal > 0.0 else Y
+    b_min = max(2.0, 0.10 * pib_base)
+    b_unconstrained = B_prev + deficit
+    B_new = max(b_min, b_unconstrained)
 
     # Déficit primario (sin intereses de deuda)
     deficit_primario = Gc + Ig + costo_subsidios + G_needed - recaudacion
@@ -307,24 +314,25 @@ def compute_sovereign_risk(
     B: float,
     PIB_nominal: float,
     R: float,
+    pi: float = 0.03,
+    U: float = 0.05,
+    Un: float = 0.05,
 ) -> tuple[float, str]:
     """
     Calcula la prima de riesgo soberano ρ (en p.p.) y la calificación crediticia
-    basadas en el Ratio Deuda/PIB Nominal y el nivel de reservas.
+    multidimensional (S&P / Moody's) basada en 3 pilares ponderados (V1.3):
+    1. Sostenibilidad de Deuda (50%): Ratio B / PIB_nominal.
+    2. Estabilidad de Precios / Inflación (30%): Desviación respecto a la meta (3%).
+    3. Empleo y Salud Laboral (20%): Brecha de desempleo respecto a la tasa natural U_n.
 
-    Escalera:
-    - Deuda/PIB_nom < 25% : ρ = 0.5  -> AAA
-    - Deuda/PIB_nom < 40% : ρ = 1.0  -> AA+
-    - Deuda/PIB_nom < 55% : ρ = 1.5  -> AA
-    - Deuda/PIB_nom < 70% : ρ = 2.5  -> A
-    - Deuda/PIB_nom < 85% : ρ = 4.0  -> BBB
-    - Deuda/PIB_nom < 100%: ρ = 6.0  -> BB
-    - Deuda/PIB_nom < 130%: ρ = 9.0  -> B
-    - Deuda/PIB_nom < 150%: ρ = 13.0 -> CCC
-    - Deuda/PIB_nom ≥ 150%: ρ = 18.0 -> D
+    Hard Caps de Realismo:
+    - Inflación > 15% o desempleo severo (> U_n + 6%): pierde el Grado de Inversión (máximo BB).
+    - Hiperinflación (> 40%) o colapso del empleo (> 20%): bono basura (CCC o D).
+    - Ratio de deuda ≥ 150%: insolvencia inminente / Default (Rating D, ρ = 18.0).
 
-    Reservas < 10 MUSD: +2.0 pp extra.
-    Reservas < 5 MUSD:  +4.0 pp extra.
+    Penalización de liquidez externa:
+    - R < 10 MUSD: +2.0 pp extra en ρ.
+    - R < 5 MUSD:  +4.0 pp extra en ρ y etiqueta '(Crisis de Reservas)'.
 
     Returns
     -------
@@ -332,35 +340,80 @@ def compute_sovereign_risk(
     """
     debt_ratio = B / max(PIB_nominal, 1.0)
 
-    if debt_ratio < 0.25:
-        rho = 0.5
-        rating = "AAA"
-    elif debt_ratio < 0.40:
-        rho = 1.0
-        rating = "AA+"
-    elif debt_ratio < 0.55:
-        rho = 1.5
-        rating = "AA"
-    elif debt_ratio < 0.70:
-        rho = 2.5
-        rating = "A"
-    elif debt_ratio < 0.85:
-        rho = 4.0
-        rating = "BBB"
-    elif debt_ratio < 1.00:
-        rho = 6.0
-        rating = "BB"
-    elif debt_ratio < 1.30:
-        rho = 9.0
-        rating = "B"
-    elif debt_ratio < 1.50:
-        rho = 13.0
-        rating = "CCC"
+    # 1. Subpuntaje Fiscal (50% ponderación)
+    if debt_ratio <= 0.25:
+        s_deuda = 10.0
+    elif debt_ratio <= 0.50:
+        s_deuda = 8.0
+    elif debt_ratio <= 0.75:
+        s_deuda = 6.0
+    elif debt_ratio <= 1.00:
+        s_deuda = 4.0
+    elif debt_ratio <= 1.35:
+        s_deuda = 2.0
     else:
+        s_deuda = 0.0
+
+    # 2. Subpuntaje Monetario / Inflación (30% ponderación)
+    delta_pi = abs(pi - 0.03)
+    if delta_pi <= 0.015:
+        s_inf = 10.0
+    elif delta_pi <= 0.040:
+        s_inf = 7.0
+    elif delta_pi <= 0.080:
+        s_inf = 5.0
+    elif delta_pi <= 0.150:
+        s_inf = 2.0
+    else:
+        s_inf = 0.0
+
+    # 3. Subpuntaje Real y Laboral (20% ponderación)
+    if U <= Un + 0.010:
+        s_lab = 10.0
+    elif U <= Un + 0.030:
+        s_lab = 7.0
+    elif U <= Un + 0.060:
+        s_lab = 4.0
+    else:
+        s_lab = 1.0
+
+    # Puntaje ponderado global [0.0, 10.0]
+    s_rating = 0.50 * s_deuda + 0.30 * s_inf + 0.20 * s_lab
+
+    # Hard Caps de Realismo Macroeconómico
+    if pi > 0.15 or U > (Un + 0.06):
+        s_rating = min(s_rating, 4.9)  # Pierde grado de inversión (máximo BB)
+
+    if pi > 0.40 or U > 0.20:
+        s_rating = min(s_rating, 1.9)  # Distress severo
+
+    # Escalera de Calificación y Spread de Riesgo rho (p.p.)
+    if debt_ratio >= 1.50:
         rho = 18.0
         rating = "D"
+    elif s_rating >= 9.0:
+        rho = 0.5
+        rating = "AAA"
+    elif s_rating >= 8.0:
+        rho = 1.0 if s_rating >= 8.5 else 1.5
+        rating = "AA+" if s_rating >= 8.5 else "AA"
+    elif s_rating >= 6.5:
+        rho = 2.5
+        rating = "A"
+    elif s_rating >= 5.0:
+        rho = 4.0
+        rating = "BBB"
+    elif s_rating >= 3.5:
+        rho = 6.0
+        rating = "BB"
+    elif s_rating >= 2.0:
+        rho = 9.0
+        rating = "B"
+    else:
+        rho = 13.0
+        rating = "CCC"
 
-    # Penalidad adicional por reservas bajas
+    # Penalidad adicional por reservas bajas (crisis de liquidez externa)
     if R < 5.0:
         rho += 4.0
         if rating not in ("CCC", "D"):

@@ -129,10 +129,10 @@ def render_kpi_panel(history: List[TurnSnapshot]) -> None:
 
     with col6:
         st.metric(
-            label="Tasa Doméstica (r)",
+            label="💳 Tasa de Crédito en la Calle (r)",
             value=f"{curr['r']:.2f}%",
             delta=r_delta_str,
-            help="Tasa de interés doméstica efectiva de equilibrio según el régimen y movilidad de capitales."
+            help="Esta es la tasa real a la que los bancos comerciales prestan a las empresas y familias en la economía. Es igual a tu Tasa Objetivo del Banco Central (TPM) + el recargo por Riesgo País (ρ) y presiones cambiarias. Esta es la tasa que verdaderamente frena o estimula la inversión privada."
         )
 
     with col7:

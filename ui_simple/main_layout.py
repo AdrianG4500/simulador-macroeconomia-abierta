@@ -144,6 +144,12 @@ def render_app() -> None:
             st.rerun()
 
     # ─────────────────────────────────────────────────────────────────────────
+    # MODAL EMERGENTE PARA EVENTOS MACROECONÓMICOS (V1.3 — FASE C.2)
+    # ─────────────────────────────────────────────────────────────────────────
+    if state_mgr.pending_modal_event is not None:
+        _handle_event_modal(state_mgr)
+
+    # ─────────────────────────────────────────────────────────────────────────
     # ENCABEZADO INSTITUCIONAL
     # ─────────────────────────────────────────────────────────────────────────
     st.markdown(
@@ -253,3 +259,54 @@ def render_app() -> None:
         except Exception as err:
             st.error(f"⚠️ Error al avanzar turno: {err}")
         st.rerun()
+
+
+def _handle_event_modal(state_mgr: StateManager) -> None:
+    """
+    Despliega el modal emergente institucional si existe un evento programado
+    o aleatorio gatillado en el turno actual (Fase C.2).
+    """
+    modal_data = state_mgr.pending_modal_event
+    if modal_data is None:
+        return
+
+    # Usar el decorador nativo st.dialog si está disponible en Streamlit
+    if hasattr(st, "dialog"):
+        @st.dialog("🚨 COMUNICADO MACROECONÓMICO OFICIAL")
+        def _render_dialog(data: Dict[str, Any]) -> None:
+            st.subheader(f"📰 {data['title']}")
+            st.markdown(f"<p style='font-size: 1.05rem; color: #334155; line-height: 1.5;'>{data['description']}</p>", unsafe_allow_html=True)
+            st.caption(f"⏱️ **Duración estimada:** {data.get('duration', 2)} turnos")
+
+            if data.get("impact_metrics"):
+                st.markdown("##### 📊 Impactos Cuantitativos Inmediatos:")
+                st.table(data["impact_metrics"])
+
+            st.info(f"💡 **Dictamen del Gabinete Económico:**\n\n{data['advice_summary']}")
+
+            if st.button("Continuar gobernando 🏛️", type="primary", use_container_width=True, key="btn_dialog_dismiss"):
+                state_mgr.dismiss_event_modal()
+                st.rerun()
+
+        _render_dialog(modal_data)
+    else:
+        # Fallback si st.dialog no está soportado en la versión de Streamlit
+        st.markdown(
+            f"""
+            <div style="background-color: #fef2f2; border: 2px solid #b91c1c; border-radius: 8px; padding: 18px 24px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(185, 28, 28, 0.15);">
+                <div style="font-size: 1.15rem; font-weight: 800; color: #991b1b; margin-bottom: 6px;">
+                    🚨 COMUNICADO MACROECONÓMICO OFICIAL
+                </div>
+                <h3 style="margin-top: 0; color: #0f172a;">📰 {modal_data['title']}</h3>
+                <p style="font-size: 1.05rem; color: #334155; line-height: 1.5;">{modal_data['description']}</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if modal_data.get("impact_metrics"):
+            st.table(modal_data["impact_metrics"])
+        st.info(f"💡 **Dictamen del Gabinete:** {modal_data['advice_summary']}")
+        if st.button("Continuar gobernando 🏛️", type="primary", use_container_width=True, key="btn_fallback_dismiss"):
+            state_mgr.dismiss_event_modal()
+            st.rerun()
+

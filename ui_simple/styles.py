@@ -1,7 +1,8 @@
 """
 ui_simple/styles.py
 ===================
-Estilos CSS profesionales y didácticos para The Economic War Room (V1.2 SIMPLE).
+Estilos CSS profesionales y didácticos para The Economic War Room (V1.3 SIMPLE).
+Diseñado para máxima legibilidad tipográfica, alto contraste y visuales institucionales.
 """
 
 from __future__ import annotations
@@ -91,71 +92,87 @@ def inject_custom_css() -> None:
         box-shadow: 0 2px 6px rgba(220, 38, 38, 0.1);
     }
 
-    /* Periódico El Observador Macroeconómico */
+    /* Periódico El Observador Macroeconómico (Alta Legibilidad) */
     .newspaper-box {
         background-color: #fdfbf7;
-        border: 2px solid #1e293b;
-        border-radius: 4px;
-        padding: 14px;
+        border: 2px solid #0f172a;
+        border-radius: 6px;
+        padding: 16px 18px;
         margin-top: 6px;
-        margin-bottom: 14px;
+        margin-bottom: 16px;
         font-family: 'Georgia', serif;
-        box-shadow: 2px 2px 8px rgba(0,0,0,0.06);
+        box-shadow: 0 3px 10px rgba(0,0,0,0.08);
     }
     .newspaper-header {
         font-family: 'Times New Roman', serif;
-        font-size: 1.15rem;
+        font-size: 1.25rem;
         font-weight: 800;
         text-transform: uppercase;
         text-align: center;
-        border-bottom: 2px solid #1e293b;
-        padding-bottom: 5px;
+        border-bottom: 2px solid #0f172a;
+        padding-bottom: 6px;
         margin-bottom: 8px;
         letter-spacing: 1.5px;
         color: #0f172a;
     }
     .newspaper-date {
-        font-size: 0.72rem;
+        font-size: 0.78rem;
         font-style: italic;
         color: #64748b;
         text-align: right;
-        margin-bottom: 6px;
+        margin-bottom: 8px;
     }
     .newspaper-headline {
-        font-size: 1.0rem;
-        font-weight: 700;
+        font-size: 1.15rem;
+        font-weight: 800;
         color: #0f172a;
-        margin-bottom: 6px;
-        line-height: 1.3;
+        margin-bottom: 8px;
+        line-height: 1.35;
     }
     .newspaper-body {
-        font-size: 0.84rem;
-        color: #334155;
-        line-height: 1.4;
+        font-size: 0.95rem;
+        color: #1e293b;
+        line-height: 1.55;
     }
 
-    /* Tarjetas de Asesores de Gabinete */
+    /* Tarjetas de Asesores de Gabinete (Identidad Visual y Tipografía Aumentada) */
     .advisor-card {
         background-color: #ffffff;
-        border-left: 4px solid #3b82f6;
         border-top: 1px solid #e2e8f0;
         border-right: 1px solid #e2e8f0;
         border-bottom: 1px solid #e2e8f0;
-        border-radius: 6px;
-        padding: 11px;
-        margin-bottom: 10px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        border-radius: 8px;
+        padding: 14px 16px;
+        margin-bottom: 14px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.06);
     }
-    .advisor-cb { border-left-color: #2563eb; }
-    .advisor-treasury { border-left-color: #059669; }
-    .advisor-labor { border-left-color: #d97706; }
-    .advisor-ss { border-left-color: #7c3aed; }
+    .advisor-cb { border-left: 5px solid #1e40af; }        /* Banco Central: Azul Marino */
+    .advisor-treasury { border-left: 5px solid #d97706; }  /* Hacienda: Dorado / Ámbar */
+    .advisor-labor { border-left: 5px solid #059669; }     /* Trabajo y Comercio: Verde Esmeralda */
+    .advisor-ss { border-left: 5px solid #7c3aed; }        /* Salter-Swan: Púrpura Institucional */
 
     .advisor-title {
-        font-size: 0.86rem;
-        font-weight: 700;
-        margin-bottom: 5px;
+        font-size: 1.05rem;
+        font-weight: 800;
+        margin-bottom: 6px;
         color: #0f172a;
+    }
+    .advisor-body {
+        font-size: 0.95rem;
+        line-height: 1.5;
+        color: #1e293b;
+    }
+    .advisor-alert-banner {
+        background-color: #fee2e2;
+        border: 1px solid #fca5a5;
+        color: #991b1b;
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-size: 0.80rem;
+        font-weight: 800;
+        margin-bottom: 8px;
+        display: inline-block;
+        letter-spacing: 0.3px;
     }
 
     /* Inspector Macroeconómico de Beta-Testing */
@@ -165,7 +182,7 @@ def inject_custom_css() -> None:
         border-radius: 6px;
         padding: 10px 14px;
         font-family: 'Consolas', 'Courier New', monospace;
-        font-size: 0.80rem;
+        font-size: 0.82rem;
         margin-top: 10px;
         margin-bottom: 10px;
     }

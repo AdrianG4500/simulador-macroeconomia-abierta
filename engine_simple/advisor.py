@@ -106,7 +106,9 @@ def run_dry_run(
 
     gY = (eq["Y"] - Y_prev) / Y_prev if Y_prev > 0 else 0.0
 
-    # Balance fiscal
+    PIB_nominal = eq["PIB_nominal"]
+
+    # Balance fiscal con piso de deuda estructural
     recaudacion, costo_subsidios, intereses_deuda, deficit, B_new, deficit_primario = compute_fiscal_balance(
         Gc=inst_copy["Gc"],
         Ig=inst_copy["Ig"],
@@ -120,12 +122,12 @@ def run_dry_run(
         B_prev=B_prev,
         r_star=inst_copy["r_star"],
         rho=rho_prev,
+        PIB_nominal=PIB_nominal,
     )
 
-    PIB_nominal = eq["PIB_nominal"]
     debt_to_gdp_nominal = compute_debt_to_gdp_nominal(B_new, PIB_nominal)
 
-    # Flujos de capital y reservas
+    # Flujos de capital y reservas (con ahorro en FSE si deuda está en piso)
     regime = inst_copy.get("regime", "fixed")
     crawl_rate = inst_copy.get("crawl_rate", 0.0)
     delta_E_expected = crawl_rate * 100.0 if regime == "crawling_peg" else 0.0
@@ -137,11 +139,24 @@ def run_dry_run(
         rho=rho_prev,
         delta_E_expected=delta_E_expected,
     )
+    b_unconstrained = B_prev + deficit
+    b_min = max(2.0, 0.10 * (PIB_nominal if PIB_nominal > 0.0 else eq["Y"]))
+    excess_surplus = max(0.0, b_min - b_unconstrained)
     R_new = update_reserves(R_prev, eq["NX"], KA, regime)
-    rho_risk, rating_risk = compute_sovereign_risk(B_new, PIB_nominal, R_new)
+    if excess_surplus > 0.0:
+        R_new = round(R_new + excess_surplus, 6)
+
+    rho_risk, rating_risk = compute_sovereign_risk(
+        B=B_new,
+        PIB_nominal=PIB_nominal,
+        R=R_new,
+        pi=pi,
+        U=U,
+        Un=p_copy["U_n"],
+    )
 
     # Salter-Swan
-    ss: SalterSwanResult = compute_salter_swan(eq, p_copy, eq["G"])
+    ss: SalterSwanResult = compute_salter_swan(eq, p_copy, eq["G"], Y_pot=Y_pot)
 
     # Score proyectado
     prev_score = current_snapshot.get("score", 70.0)
